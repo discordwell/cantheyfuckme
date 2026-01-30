@@ -66,14 +66,6 @@ interface ComplianceReport {
   fix_request_letter: string
 }
 
-interface ProjectType {
-  name: string
-  gl_per_occurrence: string
-  gl_aggregate: string
-  umbrella_required: boolean
-  umbrella_minimum?: string
-}
-
 // US States for compliance checking
 const US_STATES = [
   { code: '', name: 'Select State (optional)' },
