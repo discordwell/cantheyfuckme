@@ -958,8 +958,8 @@ function App() {
               <h2>HOLD UP</h2>
             </div>
             <div className="modal-content">
-              <p>Hey! I'm trying my best here but <strong>I'm not a lawyer</strong> and neither is the AI!</p>
-              <p>This tool is for <strong>educational purposes only</strong>. It might miss things. It might be wrong. Real legal and insurance decisions need real professionals.</p>
+              <p>Hey! I'm trying my best here but <strong>I'm not a lawyer</strong> and neither is Claude!</p>
+              <p>This tool is for <strong>educational purposes only</strong>. It might miss things. It might be wrong. If you need a lawyer, get a lawyer dawg.</p>
               <p className="modal-cta">Type <strong>"not legal advice"</strong> to confirm you understand:</p>
               <input
                 type="text"
