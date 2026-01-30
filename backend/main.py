@@ -192,13 +192,20 @@ class ExtractedPolicy(BaseModel):
     carrier: Optional[str] = None
     effective_date: Optional[str] = None
     expiration_date: Optional[str] = None
-    coverages: list[Coverage] = []
+    coverages: Optional[list[Coverage]] = []
     total_premium: Optional[str] = None
-    exclusions: list[str] = []
-    special_conditions: list[str] = []
+    exclusions: Optional[list[str]] = []
+    special_conditions: Optional[list[str]] = []
     risk_score: Optional[int] = None
-    compliance_issues: list[str] = []
+    compliance_issues: Optional[list[str]] = []
     summary: Optional[str] = None
+
+    def __init__(self, **data):
+        # Convert None to empty lists for list fields
+        for field in ['coverages', 'exclusions', 'special_conditions', 'compliance_issues']:
+            if data.get(field) is None:
+                data[field] = []
+        super().__init__(**data)
 
 EXTRACTION_PROMPT = """You are an expert insurance document analyst. Extract structured data from this insurance document.
 
