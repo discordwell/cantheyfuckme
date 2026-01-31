@@ -7,7 +7,7 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8081'
 
 // Document classification result
 interface ClassifyResult {
-  document_type: 'coi' | 'lease' | 'insurance_policy' | 'contract' | 'unknown'
+  document_type: 'coi' | 'lease' | 'gym' | 'timeshare' | 'influencer' | 'freelancer' | 'employment' | 'insurance_policy' | 'contract' | 'unknown'
   confidence: number
   description: string
   supported: boolean
@@ -42,6 +42,15 @@ interface ComplianceRequirement {
   explanation: string
 }
 
+// Extraction confidence metadata
+interface ExtractionMetadata {
+  overall_confidence: number  // 0-1
+  needs_human_review: boolean
+  review_reasons: string[]
+  low_confidence_fields: string[]
+  extraction_notes?: string
+}
+
 interface ComplianceReport {
   overall_status: 'compliant' | 'non-compliant' | 'needs-review'
   coi_data: COIData
@@ -50,6 +59,7 @@ interface ComplianceReport {
   passed: ComplianceRequirement[]
   risk_exposure: string
   fix_request_letter: string
+  extraction_metadata?: ExtractionMetadata
 }
 
 // Lease Analysis Types
@@ -83,6 +93,115 @@ interface LeaseAnalysisReport {
   missing_protections: string[]
   summary: string
   negotiation_letter: string
+}
+
+// Generic RedFlag type used by new contract types
+interface ContractRedFlag {
+  name: string
+  severity: 'critical' | 'warning' | 'info'
+  clause_text?: string
+  explanation: string
+  protection: string
+}
+
+// Gym Contract Types
+interface GymContractReport {
+  overall_risk: string
+  risk_score: number
+  gym_name?: string
+  contract_type: string
+  monthly_fee?: string
+  cancellation_difficulty: string
+  red_flags: ContractRedFlag[]
+  state_protections: string[]
+  summary: string
+  cancellation_guide: string
+}
+
+// Employment Contract Types
+interface EmploymentContractReport {
+  overall_risk: string
+  risk_score: number
+  document_type: string
+  has_non_compete: boolean
+  non_compete_enforceable?: string
+  has_arbitration: boolean
+  has_ip_assignment: boolean
+  red_flags: ContractRedFlag[]
+  state_notes: string[]
+  summary: string
+  negotiation_points: string
+}
+
+// Freelancer Contract Types
+interface FreelancerContractReport {
+  overall_risk: string
+  risk_score: number
+  contract_type: string
+  payment_terms?: string
+  ip_ownership: string
+  has_kill_fee: boolean
+  revision_limit?: string
+  red_flags: ContractRedFlag[]
+  missing_protections: string[]
+  summary: string
+  suggested_changes: string
+}
+
+// Influencer Contract Types
+interface InfluencerContractReport {
+  overall_risk: string
+  risk_score: number
+  brand_name?: string
+  campaign_type: string
+  usage_rights_duration?: string
+  exclusivity_scope?: string
+  payment_terms?: string
+  has_perpetual_rights: boolean
+  has_ai_training_rights: boolean
+  ftc_compliance: string
+  red_flags: ContractRedFlag[]
+  summary: string
+  negotiation_script: string
+}
+
+// Timeshare Contract Types
+interface TimeshareContractReport {
+  overall_risk: string
+  risk_score: number
+  resort_name?: string
+  ownership_type: string
+  has_perpetuity_clause: boolean
+  rescission_deadline?: string
+  estimated_10yr_cost?: string
+  red_flags: ContractRedFlag[]
+  exit_options: string[]
+  summary: string
+  rescission_letter: string
+}
+
+// Insurance Policy Types (with different protection field name)
+interface InsurancePolicyRedFlag {
+  name: string
+  severity: 'critical' | 'warning' | 'info'
+  clause_text?: string
+  explanation: string
+  what_to_ask: string
+}
+
+interface InsurancePolicyReport {
+  overall_risk: string
+  risk_score: number
+  policy_type: string
+  carrier?: string
+  coverage_type: string
+  valuation_method: string
+  deductible_type: string
+  has_arbitration: boolean
+  red_flags: InsurancePolicyRedFlag[]
+  coverage_gaps: string[]
+  summary: string
+  questions_for_agent: string
 }
 
 // US States for compliance checking
@@ -153,8 +272,7 @@ const AI_LIMITED_STATES: Record<string, { mitigation: string[] }> = {
 
 // Friendly names for unsupported document types
 const UNSUPPORTED_DOC_NAMES: Record<string, string> = {
-  'insurance_policy': 'full insurance policies',
-  'contract': 'general contracts',
+  'contract': 'general contracts (try uploading a specific contract type)',
   'unknown': 'this type of document',
 }
 
@@ -177,6 +295,18 @@ function App() {
   const [complianceTab, setComplianceTab] = useState<'report' | 'letter'>('report')
   const [leaseReport, setLeaseReport] = useState<LeaseAnalysisReport | null>(null)
   const [leaseTab, setLeaseTab] = useState<'report' | 'letter'>('report')
+  const [gymReport, setGymReport] = useState<GymContractReport | null>(null)
+  const [gymTab, setGymTab] = useState<'report' | 'letter'>('report')
+  const [employmentReport, setEmploymentReport] = useState<EmploymentContractReport | null>(null)
+  const [employmentTab, setEmploymentTab] = useState<'report' | 'letter'>('report')
+  const [freelancerReport, setFreelancerReport] = useState<FreelancerContractReport | null>(null)
+  const [freelancerTab, setFreelancerTab] = useState<'report' | 'letter'>('report')
+  const [influencerReport, setInfluencerReport] = useState<InfluencerContractReport | null>(null)
+  const [influencerTab, setInfluencerTab] = useState<'report' | 'letter'>('report')
+  const [timeshareReport, setTimeshareReport] = useState<TimeshareContractReport | null>(null)
+  const [timeshareTab, setTimeshareTab] = useState<'report' | 'letter'>('report')
+  const [insurancePolicyReport, setInsurancePolicyReport] = useState<InsurancePolicyReport | null>(null)
+  const [insurancePolicyTab, setInsurancePolicyTab] = useState<'report' | 'letter'>('report')
 
   // Unsupported document modal
   const [showUnsupportedModal, setShowUnsupportedModal] = useState(false)
@@ -188,7 +318,7 @@ function App() {
   const [showDisclaimerModal, setShowDisclaimerModal] = useState(false)
   const [disclaimerInput, setDisclaimerInput] = useState('')
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false)
-  const [pendingAnalysis, setPendingAnalysis] = useState<'coi' | 'lease' | null>(null)
+  const [pendingAnalysis, setPendingAnalysis] = useState<'coi' | 'lease' | 'gym' | 'employment' | 'freelancer' | 'influencer' | 'timeshare' | 'insurance_policy' | null>(null)
 
   const classifyDocument = async (text: string): Promise<ClassifyResult | null> => {
     setClassifying(true)
@@ -215,6 +345,12 @@ function App() {
     setUploadedFileName(file.name)
     setComplianceReport(null)
     setLeaseReport(null)
+    setGymReport(null)
+    setEmploymentReport(null)
+    setFreelancerReport(null)
+    setInfluencerReport(null)
+    setTimeshareReport(null)
+    setInsurancePolicyReport(null)
     setDocType(null)
 
     let text = ''
@@ -317,10 +453,9 @@ function App() {
 
     // If disclaimer not yet accepted, show the modal
     if (!disclaimerAccepted) {
-      if (currentDocType?.document_type === 'coi') {
-        setPendingAnalysis('coi')
-      } else if (currentDocType?.document_type === 'lease') {
-        setPendingAnalysis('lease')
+      const docTypeStr = currentDocType?.document_type
+      if (docTypeStr && ['coi', 'lease', 'gym', 'employment', 'freelancer', 'influencer', 'timeshare', 'insurance_policy'].includes(docTypeStr)) {
+        setPendingAnalysis(docTypeStr as typeof pendingAnalysis)
       }
       setShowDisclaimerModal(true)
       setDisclaimerInput('')
@@ -328,10 +463,35 @@ function App() {
     }
 
     // Route to appropriate analyzer
-    if (currentDocType?.document_type === 'coi') {
-      await analyzeCOI()
-    } else if (currentDocType?.document_type === 'lease') {
-      await analyzeLease()
+    await runAnalysis(currentDocType?.document_type)
+  }
+
+  const runAnalysis = async (docTypeStr: string | undefined) => {
+    switch (docTypeStr) {
+      case 'coi':
+        await analyzeCOI()
+        break
+      case 'lease':
+        await analyzeLease()
+        break
+      case 'gym':
+        await analyzeGym()
+        break
+      case 'employment':
+        await analyzeEmployment()
+        break
+      case 'freelancer':
+        await analyzeFreelancer()
+        break
+      case 'influencer':
+        await analyzeInfluencer()
+        break
+      case 'timeshare':
+        await analyzeTimeshare()
+        break
+      case 'insurance_policy':
+        await analyzeInsurancePolicy()
+        break
     }
   }
 
@@ -341,10 +501,8 @@ function App() {
       setShowDisclaimerModal(false)
 
       // Run the pending analysis
-      if (pendingAnalysis === 'coi') {
-        await analyzeCOI()
-      } else if (pendingAnalysis === 'lease') {
-        await analyzeLease()
+      if (pendingAnalysis) {
+        await runAnalysis(pendingAnalysis)
       }
       setPendingAnalysis(null)
     }
@@ -410,6 +568,160 @@ function App() {
     }
   }
 
+  const analyzeGym = async () => {
+    setLoading(true)
+    setGymReport(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/analyze-gym`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract_text: docText,
+          state: selectedState || null
+        })
+      })
+
+      if (!res.ok) throw new Error('Gym contract analysis failed')
+      const data = await res.json()
+      setGymReport(data)
+      setGymTab('report')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to analyze gym contract. Make sure the backend is running!')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const analyzeEmployment = async () => {
+    setLoading(true)
+    setEmploymentReport(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/analyze-employment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract_text: docText,
+          state: selectedState || null
+        })
+      })
+
+      if (!res.ok) throw new Error('Employment contract analysis failed')
+      const data = await res.json()
+      setEmploymentReport(data)
+      setEmploymentTab('report')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to analyze employment contract. Make sure the backend is running!')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const analyzeFreelancer = async () => {
+    setLoading(true)
+    setFreelancerReport(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/analyze-freelancer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract_text: docText
+        })
+      })
+
+      if (!res.ok) throw new Error('Freelancer contract analysis failed')
+      const data = await res.json()
+      setFreelancerReport(data)
+      setFreelancerTab('report')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to analyze freelancer contract. Make sure the backend is running!')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const analyzeInfluencer = async () => {
+    setLoading(true)
+    setInfluencerReport(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/analyze-influencer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract_text: docText
+        })
+      })
+
+      if (!res.ok) throw new Error('Influencer contract analysis failed')
+      const data = await res.json()
+      setInfluencerReport(data)
+      setInfluencerTab('report')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to analyze influencer contract. Make sure the backend is running!')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const analyzeTimeshare = async () => {
+    setLoading(true)
+    setTimeshareReport(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/analyze-timeshare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contract_text: docText,
+          state: selectedState || null
+        })
+      })
+
+      if (!res.ok) throw new Error('Timeshare contract analysis failed')
+      const data = await res.json()
+      setTimeshareReport(data)
+      setTimeshareTab('report')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to analyze timeshare contract. Make sure the backend is running!')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const analyzeInsurancePolicy = async () => {
+    setLoading(true)
+    setInsurancePolicyReport(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/analyze-insurance-policy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          policy_text: docText,
+          state: selectedState || null
+        })
+      })
+
+      if (!res.ok) throw new Error('Insurance policy analysis failed')
+      const data = await res.json()
+      setInsurancePolicyReport(data)
+      setInsurancePolicyTab('report')
+    } catch (err) {
+      console.error(err)
+      alert('Failed to analyze insurance policy. Make sure the backend is running!')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleWaitlistSubmit = () => {
     // TODO: Actually submit to a backend/email service
     console.log('Waitlist signup:', waitlistEmail, 'for', unsupportedType)
@@ -422,6 +734,12 @@ function App() {
     setDocType(null)
     setComplianceReport(null)
     setLeaseReport(null)
+    setGymReport(null)
+    setEmploymentReport(null)
+    setFreelancerReport(null)
+    setInfluencerReport(null)
+    setTimeshareReport(null)
+    setInsurancePolicyReport(null)
     setShowUnsupportedModal(false)
     setWaitlistEmail('')
     setEmailSubmitted(false)
@@ -558,7 +876,7 @@ function App() {
             rows={8}
           />
 
-          {(docType?.document_type === 'coi' || docType?.document_type === 'lease') && (
+          {docType?.supported && (
             <div className="options-row">
               {docType?.document_type === 'coi' && (
                 <div className="option-group">
@@ -576,20 +894,22 @@ function App() {
                 </div>
               )}
 
-              <div className="option-group">
-                <span className="label">STATE:</span>
-                <select
-                  className="pixel-select"
-                  value={selectedState}
-                  onChange={(e) => setSelectedState(e.target.value)}
-                >
-                  {US_STATES.map((state) => (
-                    <option key={state.code} value={state.code}>
-                      {state.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {['coi', 'lease', 'gym', 'employment', 'timeshare', 'insurance_policy'].includes(docType?.document_type || '') && (
+                <div className="option-group">
+                  <span className="label">STATE:</span>
+                  <select
+                    className="pixel-select"
+                    value={selectedState}
+                    onChange={(e) => setSelectedState(e.target.value)}
+                  >
+                    {US_STATES.map((state) => (
+                      <option key={state.code} value={state.code}>
+                        {state.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
@@ -622,6 +942,41 @@ function App() {
                 <span className="value">{complianceReport.risk_exposure}</span>
               </div>
             </div>
+
+            {/* Confidence Banner */}
+            {complianceReport.extraction_metadata && (
+              <div className={`confidence-banner ${complianceReport.extraction_metadata.needs_human_review ? 'needs-review' : 'confident'}`}>
+                <div className="confidence-header">
+                  <span className="confidence-icon">
+                    {complianceReport.extraction_metadata.needs_human_review ? '[?]' : '[✓]'}
+                  </span>
+                  <span className="confidence-label">EXTRACTION CONFIDENCE:</span>
+                  <span className={`confidence-value ${complianceReport.extraction_metadata.overall_confidence >= 0.8 ? 'high' : complianceReport.extraction_metadata.overall_confidence >= 0.6 ? 'medium' : 'low'}`}>
+                    {Math.round(complianceReport.extraction_metadata.overall_confidence * 100)}%
+                  </span>
+                </div>
+                {complianceReport.extraction_metadata.needs_human_review && (
+                  <div className="review-warning">
+                    <span className="warning-text">HUMAN REVIEW RECOMMENDED</span>
+                    {complianceReport.extraction_metadata.review_reasons.length > 0 && (
+                      <ul className="review-reasons">
+                        {complianceReport.extraction_metadata.review_reasons.slice(0, 3).map((reason, i) => (
+                          <li key={i}>{reason}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                {complianceReport.extraction_metadata.low_confidence_fields.length > 0 && (
+                  <div className="low-confidence-fields">
+                    <span className="label">LOW CONFIDENCE:</span>
+                    {complianceReport.extraction_metadata.low_confidence_fields.map((field, i) => (
+                      <span key={i} className="field-badge">{field.replace(/_/g, ' ')}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="tabs">
               <button
@@ -942,6 +1297,896 @@ function App() {
                   onClick={() => navigator.clipboard.writeText(leaseReport.negotiation_letter)}
                 >
                   [COPY] COPY LETTER
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Gym Contract Results */}
+        {gymReport && (
+          <section className="output-section gym-output">
+            <div className="compliance-header">
+              <div
+                className="compliance-status-badge"
+                style={{ backgroundColor: getRiskColor(gymReport.overall_risk) }}
+              >
+                {getRiskLabel(gymReport.overall_risk)}
+              </div>
+              <div className="risk-exposure">
+                <span className="label">CANCEL DIFFICULTY:</span>
+                <span className="value">{gymReport.cancellation_difficulty.toUpperCase()}</span>
+              </div>
+            </div>
+
+            <p className="summary-text">{gymReport.summary}</p>
+
+            <div className="tabs">
+              <button
+                className={`tab ${gymTab === 'report' ? 'active' : ''}`}
+                onClick={() => setGymTab('report')}
+              >
+                * ANALYSIS
+              </button>
+              <button
+                className={`tab ${gymTab === 'letter' ? 'active' : ''}`}
+                onClick={() => setGymTab('letter')}
+              >
+                * CANCELLATION GUIDE
+              </button>
+            </div>
+
+            {gymTab === 'report' && (
+              <div className="compliance-report">
+                {gymReport.red_flags.filter(rf => rf.severity === 'critical').length > 0 && (
+                  <div className="data-card danger full-width">
+                    <h3>XX CRITICAL RED FLAGS</h3>
+                    <div className="compliance-items">
+                      {gymReport.red_flags.filter(rf => rf.severity === 'critical').map((flag, i) => (
+                        <div key={i} className="compliance-item fail">
+                          <div className="item-header">
+                            <span className="status-icon">✗</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {gymReport.red_flags.filter(rf => rf.severity === 'warning').length > 0 && (
+                  <div className="data-card warning full-width">
+                    <h3>!! WATCH OUT FOR</h3>
+                    <div className="compliance-items">
+                      {gymReport.red_flags.filter(rf => rf.severity === 'warning').map((flag, i) => (
+                        <div key={i} className="compliance-item warning">
+                          <div className="item-header">
+                            <span className="status-icon">!</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {gymReport.state_protections.length > 0 && (
+                  <div className="data-card success full-width">
+                    <h3>** YOUR STATE PROTECTIONS</h3>
+                    <div className="missing-list">
+                      {gymReport.state_protections.map((item, i) => (
+                        <div key={i} className="missing-item">
+                          <span className="status-icon">✓</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="data-card full-width">
+                  <h3>* CONTRACT INFO</h3>
+                  <div className="coi-data-grid">
+                    <div className="data-row">
+                      <span className="label">GYM:</span>
+                      <span className="value">{gymReport.gym_name || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">TYPE:</span>
+                      <span className="value">{gymReport.contract_type?.toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">MONTHLY:</span>
+                      <span className="value mono">{gymReport.monthly_fee || '---'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {gymTab === 'letter' && (
+              <div className="letter-view">
+                <div className="letter-content">
+                  <pre>{gymReport.cancellation_guide}</pre>
+                </div>
+                <button
+                  className="pixel-btn secondary"
+                  onClick={() => navigator.clipboard.writeText(gymReport.cancellation_guide)}
+                >
+                  [COPY] COPY GUIDE
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Employment Contract Results */}
+        {employmentReport && (
+          <section className="output-section employment-output">
+            <div className="compliance-header">
+              <div
+                className="compliance-status-badge"
+                style={{ backgroundColor: getRiskColor(employmentReport.overall_risk) }}
+              >
+                {getRiskLabel(employmentReport.overall_risk)}
+              </div>
+              <div className="risk-exposure">
+                <span className="label">RISK SCORE:</span>
+                <span className="value">{employmentReport.risk_score}/100</span>
+              </div>
+            </div>
+
+            <p className="summary-text">{employmentReport.summary}</p>
+
+            <div className="tabs">
+              <button
+                className={`tab ${employmentTab === 'report' ? 'active' : ''}`}
+                onClick={() => setEmploymentTab('report')}
+              >
+                * ANALYSIS
+              </button>
+              <button
+                className={`tab ${employmentTab === 'letter' ? 'active' : ''}`}
+                onClick={() => setEmploymentTab('letter')}
+              >
+                * NEGOTIATION POINTS
+              </button>
+            </div>
+
+            {employmentTab === 'report' && (
+              <div className="compliance-report">
+                {employmentReport.red_flags.filter(rf => rf.severity === 'critical').length > 0 && (
+                  <div className="data-card danger full-width">
+                    <h3>XX CRITICAL RED FLAGS</h3>
+                    <div className="compliance-items">
+                      {employmentReport.red_flags.filter(rf => rf.severity === 'critical').map((flag, i) => (
+                        <div key={i} className="compliance-item fail">
+                          <div className="item-header">
+                            <span className="status-icon">✗</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {employmentReport.red_flags.filter(rf => rf.severity === 'warning').length > 0 && (
+                  <div className="data-card warning full-width">
+                    <h3>!! WATCH OUT FOR</h3>
+                    <div className="compliance-items">
+                      {employmentReport.red_flags.filter(rf => rf.severity === 'warning').map((flag, i) => (
+                        <div key={i} className="compliance-item warning">
+                          <div className="item-header">
+                            <span className="status-icon">!</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {employmentReport.state_notes.length > 0 && (
+                  <div className="data-card info full-width">
+                    <h3>?? STATE-SPECIFIC NOTES</h3>
+                    <div className="missing-list">
+                      {employmentReport.state_notes.map((item, i) => (
+                        <div key={i} className="missing-item">
+                          <span className="status-icon">*</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="data-card full-width">
+                  <h3>* CONTRACT INFO</h3>
+                  <div className="coi-data-grid">
+                    <div className="data-row">
+                      <span className="label">TYPE:</span>
+                      <span className="value">{employmentReport.document_type?.replace(/_/g, ' ').toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">NON-COMPETE:</span>
+                      <span className={`value ${employmentReport.has_non_compete ? 'fail' : 'pass'}`}>
+                        {employmentReport.has_non_compete ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                    {employmentReport.has_non_compete && (
+                      <div className="data-row">
+                        <span className="label">ENFORCEABLE:</span>
+                        <span className="value">{employmentReport.non_compete_enforceable?.toUpperCase() || '---'}</span>
+                      </div>
+                    )}
+                    <div className="data-row">
+                      <span className="label">ARBITRATION:</span>
+                      <span className={`value ${employmentReport.has_arbitration ? 'fail' : 'pass'}`}>
+                        {employmentReport.has_arbitration ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">IP ASSIGNMENT:</span>
+                      <span className={`value ${employmentReport.has_ip_assignment ? 'fail' : ''}`}>
+                        {employmentReport.has_ip_assignment ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {employmentTab === 'letter' && (
+              <div className="letter-view">
+                <div className="letter-content">
+                  <pre>{employmentReport.negotiation_points}</pre>
+                </div>
+                <button
+                  className="pixel-btn secondary"
+                  onClick={() => navigator.clipboard.writeText(employmentReport.negotiation_points)}
+                >
+                  [COPY] COPY POINTS
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Freelancer Contract Results */}
+        {freelancerReport && (
+          <section className="output-section freelancer-output">
+            <div className="compliance-header">
+              <div
+                className="compliance-status-badge"
+                style={{ backgroundColor: getRiskColor(freelancerReport.overall_risk) }}
+              >
+                {getRiskLabel(freelancerReport.overall_risk)}
+              </div>
+              <div className="risk-exposure">
+                <span className="label">RISK SCORE:</span>
+                <span className="value">{freelancerReport.risk_score}/100</span>
+              </div>
+            </div>
+
+            <p className="summary-text">{freelancerReport.summary}</p>
+
+            <div className="tabs">
+              <button
+                className={`tab ${freelancerTab === 'report' ? 'active' : ''}`}
+                onClick={() => setFreelancerTab('report')}
+              >
+                * ANALYSIS
+              </button>
+              <button
+                className={`tab ${freelancerTab === 'letter' ? 'active' : ''}`}
+                onClick={() => setFreelancerTab('letter')}
+              >
+                * SUGGESTED CHANGES
+              </button>
+            </div>
+
+            {freelancerTab === 'report' && (
+              <div className="compliance-report">
+                {freelancerReport.red_flags.filter(rf => rf.severity === 'critical').length > 0 && (
+                  <div className="data-card danger full-width">
+                    <h3>XX CRITICAL RED FLAGS</h3>
+                    <div className="compliance-items">
+                      {freelancerReport.red_flags.filter(rf => rf.severity === 'critical').map((flag, i) => (
+                        <div key={i} className="compliance-item fail">
+                          <div className="item-header">
+                            <span className="status-icon">✗</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {freelancerReport.red_flags.filter(rf => rf.severity === 'warning').length > 0 && (
+                  <div className="data-card warning full-width">
+                    <h3>!! WATCH OUT FOR</h3>
+                    <div className="compliance-items">
+                      {freelancerReport.red_flags.filter(rf => rf.severity === 'warning').map((flag, i) => (
+                        <div key={i} className="compliance-item warning">
+                          <div className="item-header">
+                            <span className="status-icon">!</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {freelancerReport.missing_protections.length > 0 && (
+                  <div className="data-card info full-width">
+                    <h3>?? MISSING PROTECTIONS</h3>
+                    <div className="missing-list">
+                      {freelancerReport.missing_protections.map((item, i) => (
+                        <div key={i} className="missing-item">
+                          <span className="status-icon">-</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="data-card full-width">
+                  <h3>* CONTRACT INFO</h3>
+                  <div className="coi-data-grid">
+                    <div className="data-row">
+                      <span className="label">TYPE:</span>
+                      <span className="value">{freelancerReport.contract_type?.toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">PAYMENT:</span>
+                      <span className="value">{freelancerReport.payment_terms || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">IP OWNERSHIP:</span>
+                      <span className="value">{freelancerReport.ip_ownership?.replace(/_/g, ' ').toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">KILL FEE:</span>
+                      <span className={`value ${freelancerReport.has_kill_fee ? 'pass' : 'fail'}`}>
+                        {freelancerReport.has_kill_fee ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">REVISIONS:</span>
+                      <span className="value">{freelancerReport.revision_limit || 'UNLIMITED'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {freelancerTab === 'letter' && (
+              <div className="letter-view">
+                <div className="letter-content">
+                  <pre>{freelancerReport.suggested_changes}</pre>
+                </div>
+                <button
+                  className="pixel-btn secondary"
+                  onClick={() => navigator.clipboard.writeText(freelancerReport.suggested_changes)}
+                >
+                  [COPY] COPY CHANGES
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Influencer Contract Results */}
+        {influencerReport && (
+          <section className="output-section influencer-output">
+            <div className="compliance-header">
+              <div
+                className="compliance-status-badge"
+                style={{ backgroundColor: getRiskColor(influencerReport.overall_risk) }}
+              >
+                {getRiskLabel(influencerReport.overall_risk)}
+              </div>
+              <div className="risk-exposure">
+                <span className="label">FTC COMPLIANCE:</span>
+                <span className={`value ${influencerReport.ftc_compliance === 'addressed' ? 'pass' : influencerReport.ftc_compliance === 'missing' ? 'fail' : ''}`}>
+                  {influencerReport.ftc_compliance.toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            <p className="summary-text">{influencerReport.summary}</p>
+
+            <div className="tabs">
+              <button
+                className={`tab ${influencerTab === 'report' ? 'active' : ''}`}
+                onClick={() => setInfluencerTab('report')}
+              >
+                * ANALYSIS
+              </button>
+              <button
+                className={`tab ${influencerTab === 'letter' ? 'active' : ''}`}
+                onClick={() => setInfluencerTab('letter')}
+              >
+                * NEGOTIATION SCRIPT
+              </button>
+            </div>
+
+            {influencerTab === 'report' && (
+              <div className="compliance-report">
+                {influencerReport.red_flags.filter(rf => rf.severity === 'critical').length > 0 && (
+                  <div className="data-card danger full-width">
+                    <h3>XX CRITICAL RED FLAGS</h3>
+                    <div className="compliance-items">
+                      {influencerReport.red_flags.filter(rf => rf.severity === 'critical').map((flag, i) => (
+                        <div key={i} className="compliance-item fail">
+                          <div className="item-header">
+                            <span className="status-icon">✗</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {influencerReport.red_flags.filter(rf => rf.severity === 'warning').length > 0 && (
+                  <div className="data-card warning full-width">
+                    <h3>!! WATCH OUT FOR</h3>
+                    <div className="compliance-items">
+                      {influencerReport.red_flags.filter(rf => rf.severity === 'warning').map((flag, i) => (
+                        <div key={i} className="compliance-item warning">
+                          <div className="item-header">
+                            <span className="status-icon">!</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="data-card full-width">
+                  <h3>* CONTRACT INFO</h3>
+                  <div className="coi-data-grid">
+                    <div className="data-row">
+                      <span className="label">BRAND:</span>
+                      <span className="value">{influencerReport.brand_name || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">CAMPAIGN:</span>
+                      <span className="value">{influencerReport.campaign_type?.replace(/_/g, ' ').toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">USAGE RIGHTS:</span>
+                      <span className="value">{influencerReport.usage_rights_duration || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">EXCLUSIVITY:</span>
+                      <span className="value">{influencerReport.exclusivity_scope || 'NONE'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">PERPETUAL:</span>
+                      <span className={`value ${influencerReport.has_perpetual_rights ? 'fail' : 'pass'}`}>
+                        {influencerReport.has_perpetual_rights ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">AI TRAINING:</span>
+                      <span className={`value ${influencerReport.has_ai_training_rights ? 'fail' : 'pass'}`}>
+                        {influencerReport.has_ai_training_rights ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">PAYMENT:</span>
+                      <span className="value">{influencerReport.payment_terms || '---'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {influencerTab === 'letter' && (
+              <div className="letter-view">
+                <div className="letter-content">
+                  <pre>{influencerReport.negotiation_script}</pre>
+                </div>
+                <button
+                  className="pixel-btn secondary"
+                  onClick={() => navigator.clipboard.writeText(influencerReport.negotiation_script)}
+                >
+                  [COPY] COPY SCRIPT
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Timeshare Contract Results */}
+        {timeshareReport && (
+          <section className="output-section timeshare-output">
+            <div className="compliance-header">
+              <div
+                className="compliance-status-badge"
+                style={{ backgroundColor: getRiskColor(timeshareReport.overall_risk) }}
+              >
+                {getRiskLabel(timeshareReport.overall_risk)}
+              </div>
+              <div className="risk-exposure">
+                <span className="label">10-YEAR COST:</span>
+                <span className="value">{timeshareReport.estimated_10yr_cost || 'UNKNOWN'}</span>
+              </div>
+            </div>
+
+            <p className="summary-text">{timeshareReport.summary}</p>
+
+            <div className="tabs">
+              <button
+                className={`tab ${timeshareTab === 'report' ? 'active' : ''}`}
+                onClick={() => setTimeshareTab('report')}
+              >
+                * ANALYSIS
+              </button>
+              <button
+                className={`tab ${timeshareTab === 'letter' ? 'active' : ''}`}
+                onClick={() => setTimeshareTab('letter')}
+              >
+                * RESCISSION LETTER
+              </button>
+            </div>
+
+            {timeshareTab === 'report' && (
+              <div className="compliance-report">
+                {timeshareReport.red_flags.filter(rf => rf.severity === 'critical').length > 0 && (
+                  <div className="data-card danger full-width">
+                    <h3>XX CRITICAL RED FLAGS</h3>
+                    <div className="compliance-items">
+                      {timeshareReport.red_flags.filter(rf => rf.severity === 'critical').map((flag, i) => (
+                        <div key={i} className="compliance-item fail">
+                          <div className="item-header">
+                            <span className="status-icon">✗</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {timeshareReport.red_flags.filter(rf => rf.severity === 'warning').length > 0 && (
+                  <div className="data-card warning full-width">
+                    <h3>!! WATCH OUT FOR</h3>
+                    <div className="compliance-items">
+                      {timeshareReport.red_flags.filter(rf => rf.severity === 'warning').map((flag, i) => (
+                        <div key={i} className="compliance-item warning">
+                          <div className="item-header">
+                            <span className="status-icon">!</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">PROTECTION:</span>
+                            <span className="value">{flag.protection}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {timeshareReport.exit_options.length > 0 && (
+                  <div className="data-card info full-width">
+                    <h3>?? EXIT OPTIONS</h3>
+                    <div className="missing-list">
+                      {timeshareReport.exit_options.map((item, i) => (
+                        <div key={i} className="missing-item">
+                          <span className="status-icon">{i + 1}.</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="data-card full-width">
+                  <h3>* CONTRACT INFO</h3>
+                  <div className="coi-data-grid">
+                    <div className="data-row">
+                      <span className="label">RESORT:</span>
+                      <span className="value">{timeshareReport.resort_name || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">OWNERSHIP:</span>
+                      <span className="value">{timeshareReport.ownership_type?.replace(/_/g, ' ').toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">PERPETUITY:</span>
+                      <span className={`value ${timeshareReport.has_perpetuity_clause ? 'fail' : 'pass'}`}>
+                        {timeshareReport.has_perpetuity_clause ? 'YES - FOREVER' : 'NO'}
+                      </span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">RESCISSION:</span>
+                      <span className={`value ${timeshareReport.rescission_deadline ? '' : 'fail'}`}>
+                        {timeshareReport.rescission_deadline || 'CHECK STATE LAW'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {timeshareTab === 'letter' && (
+              <div className="letter-view">
+                <div className="letter-content">
+                  <pre>{timeshareReport.rescission_letter}</pre>
+                </div>
+                <button
+                  className="pixel-btn secondary"
+                  onClick={() => navigator.clipboard.writeText(timeshareReport.rescission_letter)}
+                >
+                  [COPY] COPY LETTER
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Insurance Policy Results */}
+        {insurancePolicyReport && (
+          <section className="output-section insurance-policy-output">
+            <div className="compliance-header">
+              <div
+                className="compliance-status-badge"
+                style={{ backgroundColor: getRiskColor(insurancePolicyReport.overall_risk) }}
+              >
+                {getRiskLabel(insurancePolicyReport.overall_risk)}
+              </div>
+              <div className="risk-exposure">
+                <span className="label">VALUATION:</span>
+                <span className={`value ${insurancePolicyReport.valuation_method === 'actual_cash_value' ? 'fail' : ''}`}>
+                  {insurancePolicyReport.valuation_method?.replace(/_/g, ' ').toUpperCase() || '---'}
+                </span>
+              </div>
+            </div>
+
+            <p className="summary-text">{insurancePolicyReport.summary}</p>
+
+            <div className="tabs">
+              <button
+                className={`tab ${insurancePolicyTab === 'report' ? 'active' : ''}`}
+                onClick={() => setInsurancePolicyTab('report')}
+              >
+                * ANALYSIS
+              </button>
+              <button
+                className={`tab ${insurancePolicyTab === 'letter' ? 'active' : ''}`}
+                onClick={() => setInsurancePolicyTab('letter')}
+              >
+                * QUESTIONS FOR AGENT
+              </button>
+            </div>
+
+            {insurancePolicyTab === 'report' && (
+              <div className="compliance-report">
+                {insurancePolicyReport.red_flags.filter(rf => rf.severity === 'critical').length > 0 && (
+                  <div className="data-card danger full-width">
+                    <h3>XX CRITICAL RED FLAGS</h3>
+                    <div className="compliance-items">
+                      {insurancePolicyReport.red_flags.filter(rf => rf.severity === 'critical').map((flag, i) => (
+                        <div key={i} className="compliance-item fail">
+                          <div className="item-header">
+                            <span className="status-icon">✗</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">ASK AGENT:</span>
+                            <span className="value">{flag.what_to_ask}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {insurancePolicyReport.red_flags.filter(rf => rf.severity === 'warning').length > 0 && (
+                  <div className="data-card warning full-width">
+                    <h3>!! WATCH OUT FOR</h3>
+                    <div className="compliance-items">
+                      {insurancePolicyReport.red_flags.filter(rf => rf.severity === 'warning').map((flag, i) => (
+                        <div key={i} className="compliance-item warning">
+                          <div className="item-header">
+                            <span className="status-icon">!</span>
+                            <span className="item-name">{flag.name}</span>
+                          </div>
+                          {flag.clause_text && (
+                            <div className="clause-text">
+                              <span className="label">CLAUSE:</span>
+                              <span className="value">"{flag.clause_text}"</span>
+                            </div>
+                          )}
+                          <p className="item-explanation">{flag.explanation}</p>
+                          <div className="protection-box">
+                            <span className="label">ASK AGENT:</span>
+                            <span className="value">{flag.what_to_ask}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {insurancePolicyReport.coverage_gaps.length > 0 && (
+                  <div className="data-card info full-width">
+                    <h3>?? COVERAGE GAPS</h3>
+                    <div className="missing-list">
+                      {insurancePolicyReport.coverage_gaps.map((item, i) => (
+                        <div key={i} className="missing-item">
+                          <span className="status-icon">-</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="data-card full-width">
+                  <h3>* POLICY INFO</h3>
+                  <div className="coi-data-grid">
+                    <div className="data-row">
+                      <span className="label">TYPE:</span>
+                      <span className="value">{insurancePolicyReport.policy_type?.toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">CARRIER:</span>
+                      <span className="value">{insurancePolicyReport.carrier || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">COVERAGE:</span>
+                      <span className="value">{insurancePolicyReport.coverage_type?.replace(/_/g, ' ').toUpperCase() || '---'}</span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">DEDUCTIBLE:</span>
+                      <span className={`value ${insurancePolicyReport.deductible_type === 'percentage' ? 'fail' : ''}`}>
+                        {insurancePolicyReport.deductible_type?.toUpperCase() || '---'}
+                      </span>
+                    </div>
+                    <div className="data-row">
+                      <span className="label">ARBITRATION:</span>
+                      <span className={`value ${insurancePolicyReport.has_arbitration ? 'fail' : 'pass'}`}>
+                        {insurancePolicyReport.has_arbitration ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {insurancePolicyTab === 'letter' && (
+              <div className="letter-view">
+                <div className="letter-content">
+                  <pre>{insurancePolicyReport.questions_for_agent}</pre>
+                </div>
+                <button
+                  className="pixel-btn secondary"
+                  onClick={() => navigator.clipboard.writeText(insurancePolicyReport.questions_for_agent)}
+                >
+                  [COPY] COPY QUESTIONS
                 </button>
               </div>
             )}

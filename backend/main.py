@@ -191,6 +191,15 @@ class Coverage(BaseModel):
     notes: Optional[str] = None
 
 # COI Compliance Checker Models
+
+# Confidence level for extracted fields
+class FieldConfidence(BaseModel):
+    """Confidence information for an extracted field"""
+    level: str  # "high", "medium", "low"
+    reason: Optional[str] = None  # Why this confidence level
+    source_quote: Optional[str] = None  # Direct quote from document supporting this extraction
+
+
 class COIData(BaseModel):
     insured_name: Optional[str] = None
     policy_number: Optional[str] = None
@@ -210,6 +219,18 @@ class COIData(BaseModel):
     cg_20_10_endorsement: bool = False
     cg_20_37_endorsement: bool = False
 
+    # Confidence scores for critical fields
+    confidence: Optional[dict[str, FieldConfidence]] = None
+
+
+class ExtractionMetadata(BaseModel):
+    """Metadata about the extraction process"""
+    overall_confidence: float  # 0-1 score
+    needs_human_review: bool  # True if confidence is low or critical fields are uncertain
+    review_reasons: list[str] = []  # Why human review is recommended
+    low_confidence_fields: list[str] = []  # Fields with low confidence
+    extraction_notes: Optional[str] = None  # Any notes from extraction process
+
 class ComplianceRequirement(BaseModel):
     name: str
     required_value: str
@@ -225,6 +246,9 @@ class ComplianceReport(BaseModel):
     passed: list[ComplianceRequirement] = []
     risk_exposure: str
     fix_request_letter: str
+
+    # Extraction confidence metadata
+    extraction_metadata: Optional[ExtractionMetadata] = None
 
     def __init__(self, **data):
         for field in ['critical_gaps', 'warnings', 'passed']:
@@ -268,10 +292,35 @@ SUPPORTED_DOC_TYPES = {
         "description": "Commercial or residential lease agreement",
         "supported": True
     },
+    "gym_contract": {
+        "name": "Gym/Fitness Membership",
+        "description": "Gym or fitness center membership agreement",
+        "supported": True
+    },
+    "employment_contract": {
+        "name": "Employment Contract",
+        "description": "Employment agreement, offer letter, or employee handbook",
+        "supported": True
+    },
+    "freelancer_contract": {
+        "name": "Freelancer Agreement",
+        "description": "Independent contractor, freelance, or consulting agreement",
+        "supported": True
+    },
+    "influencer_contract": {
+        "name": "Influencer/Sponsorship",
+        "description": "Brand deal, sponsorship, or content creator agreement",
+        "supported": True
+    },
     "insurance_policy": {
         "name": "Insurance Policy",
         "description": "Full insurance policy document",
-        "supported": False
+        "supported": True
+    },
+    "timeshare_contract": {
+        "name": "Timeshare Contract",
+        "description": "Timeshare or vacation ownership agreement",
+        "supported": True
     },
     "contract": {
         "name": "Contract",
@@ -777,9 +826,23 @@ Return a JSON object with these fields:
 - cg_20_10_endorsement: boolean - is CG 20 10 (ongoing operations) endorsement referenced?
 - cg_20_37_endorsement: boolean - is CG 20 37 (completed operations) endorsement referenced?
 
+CONFIDENCE SCORING - For each critical field, provide a confidence assessment:
+- confidence: An object with field names as keys, each containing:
+  - level: "high" (clearly visible/readable), "medium" (present but ambiguous), or "low" (inferred or uncertain)
+  - reason: Brief explanation of confidence level
+  - source_quote: Direct quote from document (max 50 chars) if available, null if not found
+
+Provide confidence for these critical fields:
+- gl_limit_per_occurrence
+- gl_limit_aggregate
+- additional_insured_checked
+- waiver_of_subrogation_checked
+- cg_20_10_endorsement
+- cg_20_37_endorsement
+
 IMPORTANT: Being listed as "Certificate Holder" does NOT make someone an Additional Insured. These are separate concepts.
 
-If a field isn't clearly present, use null for strings or false for booleans.
+If a field isn't clearly present, use null for strings or false for booleans. When uncertain, mark confidence as "low".
 
 COI Document:
 <<DOCUMENT>>
@@ -1375,6 +1438,17 @@ Regards,
 [Your Company]
 """
 
+    # Generate mock extraction metadata
+    extraction_metadata = {
+        "overall_confidence": 0.75,
+        "needs_human_review": len(critical_gaps) > 0 or not coi_data.get('additional_insured_checked'),
+        "review_reasons": [
+            "Mock extraction - recommend verification with actual document"
+        ] + ([f"Critical gap: {gap['name']}" for gap in critical_gaps[:2]]),
+        "low_confidence_fields": ["cg_20_10_endorsement", "cg_20_37_endorsement"] if not coi_data.get('cg_20_10_endorsement') else [],
+        "extraction_notes": "Mock extraction for testing purposes"
+    }
+
     return {
         "overall_status": overall_status,
         "coi_data": coi_data,
@@ -1382,7 +1456,8 @@ Regards,
         "warnings": warnings,
         "passed": passed,
         "risk_exposure": risk_exposure,
-        "fix_request_letter": fix_letter
+        "fix_request_letter": fix_letter,
+        "extraction_metadata": extraction_metadata
     }
 
 @app.post("/api/check-coi-compliance", response_model=ComplianceReport)
@@ -1444,12 +1519,71 @@ async def check_coi_compliance(input: COIComplianceInput):
         result = json.loads(response_text)
         result['coi_data'] = coi_data
 
+        # Calculate extraction confidence metadata
+        extraction_metadata = calculate_extraction_confidence(coi_data)
+        result['extraction_metadata'] = extraction_metadata
+
         return ComplianceReport(**result)
 
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def calculate_extraction_confidence(coi_data: dict) -> dict:
+    """Calculate overall extraction confidence and determine if human review is needed"""
+    confidence_data = coi_data.get('confidence', {})
+
+    # Critical fields that need confidence assessment
+    critical_fields = [
+        'gl_limit_per_occurrence',
+        'gl_limit_aggregate',
+        'additional_insured_checked',
+        'waiver_of_subrogation_checked',
+        'cg_20_10_endorsement',
+        'cg_20_37_endorsement'
+    ]
+
+    # Calculate confidence scores
+    confidence_scores = []
+    low_confidence_fields = []
+    review_reasons = []
+
+    for field in critical_fields:
+        field_conf = confidence_data.get(field, {})
+        level = field_conf.get('level', 'low') if isinstance(field_conf, dict) else 'low'
+
+        if level == 'high':
+            confidence_scores.append(1.0)
+        elif level == 'medium':
+            confidence_scores.append(0.7)
+        else:  # low
+            confidence_scores.append(0.3)
+            low_confidence_fields.append(field)
+            reason = field_conf.get('reason', 'Not clearly visible in document') if isinstance(field_conf, dict) else 'No confidence data'
+            review_reasons.append(f"{field}: {reason}")
+
+    # Calculate overall confidence
+    overall_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.5
+
+    # Determine if human review is needed
+    # Threshold: 0.8 (80% confidence) - based on research recommendations
+    needs_human_review = overall_confidence < 0.8 or len(low_confidence_fields) > 0
+
+    # Add additional review reasons
+    if not coi_data.get('additional_insured_checked'):
+        review_reasons.append("Additional Insured not checked - verify this is intentional")
+    if not coi_data.get('cg_20_10_endorsement') and not coi_data.get('cg_20_37_endorsement'):
+        review_reasons.append("No CG endorsements found - may indicate incomplete coverage")
+
+    return {
+        "overall_confidence": round(overall_confidence, 2),
+        "needs_human_review": needs_human_review,
+        "review_reasons": review_reasons[:5],  # Limit to top 5 reasons
+        "low_confidence_fields": low_confidence_fields,
+        "extraction_notes": f"Analyzed {len(critical_fields)} critical fields. {len(low_confidence_fields)} have low confidence."
+    }
 
 @app.get("/api/project-types")
 async def get_project_types():
@@ -1559,14 +1693,24 @@ async def get_ai_limited_states():
 CLASSIFY_PROMPT = """Classify this document into one of these categories:
 - "coi" = Certificate of Insurance (ACORD 25 form, insurance certificate, proof of coverage)
 - "lease" = Property Lease (rental agreement, commercial lease, residential lease)
+- "gym_contract" = Gym/Fitness Membership (gym membership, fitness center contract, health club agreement)
+- "employment_contract" = Employment Contract (offer letter, employment agreement, employee handbook with arbitration/non-compete)
+- "freelancer_contract" = Freelancer/Contractor Agreement (independent contractor, consulting, freelance, SOW)
+- "influencer_contract" = Influencer/Sponsorship (brand deal, sponsorship, content creator agreement, influencer contract)
 - "insurance_policy" = Full Insurance Policy (declarations page, policy document, coverage details)
+- "timeshare_contract" = Timeshare Contract (vacation ownership, timeshare purchase, resort membership)
 - "contract" = Other Contract (service agreement, vendor contract, NDA, etc.)
 - "unknown" = Cannot determine
 
 Look for key indicators:
 - COI: "CERTIFICATE OF LIABILITY INSURANCE", "ACORD", "CERTIFICATE HOLDER", "ADDITIONAL INSURED"
 - Lease: "LEASE AGREEMENT", "LANDLORD", "TENANT", "RENT", "PREMISES", "TERM"
+- Gym: "MEMBERSHIP", "FITNESS", "GYM", "HEALTH CLUB", "CANCEL", "DUES", "MONTHLY FEE"
+- Employment: "EMPLOYMENT", "EMPLOYEE", "NON-COMPETE", "ARBITRATION", "AT-WILL", "TERMINATION", "SALARY"
+- Freelancer: "INDEPENDENT CONTRACTOR", "FREELANCE", "CONSULTING", "DELIVERABLES", "SOW", "WORK FOR HIRE"
+- Influencer: "BRAND", "SPONSOR", "INFLUENCER", "CONTENT", "DELIVERABLES", "USAGE RIGHTS", "EXCLUSIVITY", "CAMPAIGN"
 - Insurance Policy: "DECLARATIONS", "POLICY NUMBER", "COVERAGE", "PREMIUM", "ENDORSEMENT"
+- Timeshare: "TIMESHARE", "VACATION OWNERSHIP", "RESORT", "INTERVAL", "MAINTENANCE FEE", "DEEDED", "RIGHT TO USE"
 - Contract: "AGREEMENT", "PARTIES", "TERMS AND CONDITIONS", "WHEREAS"
 
 Return JSON only:
@@ -1596,42 +1740,93 @@ async def ocr_document(input: OCRInput):
 
         client = get_client()
 
-        # Determine the media type for the data URL
-        if input.file_type.startswith('image/'):
-            media_type = input.file_type
-        elif input.file_type == 'application/pdf':
-            media_type = 'application/pdf'
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {input.file_type}")
+        # Decode base64 file data
+        import base64
+        file_bytes = base64.b64decode(input.file_data)
 
-        # Create the data URL
-        data_url = f"data:{media_type};base64,{input.file_data}"
+        # Handle PDFs by converting to images first
+        if input.file_type == 'application/pdf':
+            import fitz  # PyMuPDF
+            import io
 
-        # Call OpenAI Vision API
-        response = client.chat.completions.create(
-            model="gpt-4o",  # Use gpt-4o for vision capabilities
-            max_tokens=4096,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
+            # Open PDF from bytes
+            pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
+
+            all_text = []
+            # Process each page (limit to first 5 pages for performance)
+            for page_num in range(min(len(pdf_doc), 5)):
+                page = pdf_doc[page_num]
+                # Render page to image at 150 DPI for good quality
+                pix = page.get_pixmap(dpi=150)
+                img_bytes = pix.tobytes("png")
+                img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+
+                # Create data URL for image
+                data_url = f"data:image/png;base64,{img_base64}"
+
+                # Call Vision API for this page
+                response = client.chat.completions.create(
+                    model="gpt-5.2",
+                    max_completion_tokens=4096,
+                    messages=[
                         {
-                            "type": "text",
-                            "text": OCR_PROMPT
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": data_url
-                            }
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": OCR_PROMPT
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": data_url
+                                    }
+                                }
+                            ]
                         }
                     ]
-                }
-            ]
-        )
+                )
 
-        extracted_text = response.choices[0].message.content
-        return {"text": extracted_text}
+                page_text = response.choices[0].message.content
+                if len(pdf_doc) > 1:
+                    all_text.append(f"--- Page {page_num + 1} ---\n{page_text}")
+                else:
+                    all_text.append(page_text)
+
+            pdf_doc.close()
+            return {"text": "\n\n".join(all_text)}
+
+        # Handle images directly
+        elif input.file_type.startswith('image/'):
+            media_type = input.file_type
+            data_url = f"data:{media_type};base64,{input.file_data}"
+
+            response = client.chat.completions.create(
+                model="gpt-5.2",
+                max_completion_tokens=4096,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": OCR_PROMPT
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": data_url
+                                }
+                            }
+                        ]
+                    }
+                ]
+            )
+
+            return {"text": response.choices[0].message.content}
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {input.file_type}")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR failed: {str(e)}")
@@ -1648,6 +1843,16 @@ async def classify_document(input: ClassifyInput):
                 doc_type = "coi"
             elif 'lease' in text_lower or ('landlord' in text_lower and 'tenant' in text_lower):
                 doc_type = "lease"
+            elif 'gym' in text_lower or 'fitness' in text_lower or ('membership' in text_lower and ('cancel' in text_lower or 'dues' in text_lower)):
+                doc_type = "gym_contract"
+            elif 'timeshare' in text_lower or 'vacation ownership' in text_lower or ('resort' in text_lower and 'maintenance fee' in text_lower):
+                doc_type = "timeshare_contract"
+            elif 'influencer' in text_lower or 'brand deal' in text_lower or ('content' in text_lower and 'usage rights' in text_lower) or 'sponsorship' in text_lower:
+                doc_type = "influencer_contract"
+            elif 'independent contractor' in text_lower or 'freelance' in text_lower or ('contractor' in text_lower and 'deliverables' in text_lower):
+                doc_type = "freelancer_contract"
+            elif 'employment' in text_lower or 'non-compete' in text_lower or ('employee' in text_lower and ('arbitration' in text_lower or 'at-will' in text_lower)):
+                doc_type = "employment_contract"
             elif 'policy' in text_lower and 'premium' in text_lower:
                 doc_type = "insurance_policy"
             elif 'agreement' in text_lower or 'contract' in text_lower:
@@ -1670,7 +1875,7 @@ async def classify_document(input: ClassifyInput):
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",  # Cheap and fast
-            max_tokens=150,
+            max_completion_tokens=150,
             messages=[
                 {"role": "system", "content": CLASSIFY_PROMPT},
                 {"role": "user", "content": f"Classify this document:\n\n{sample_text}"}
@@ -1993,7 +2198,7 @@ async def analyze_lease(input: LeaseAnalysisInput):
 
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            max_tokens=4096,
+            max_completion_tokens=4096,
             messages=[{"role": "user", "content": extract_prompt}]
         )
 
@@ -2013,7 +2218,7 @@ async def analyze_lease(input: LeaseAnalysisInput):
 
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            max_tokens=4096,
+            max_completion_tokens=4096,
             messages=[{"role": "user", "content": analysis_prompt}]
         )
 
@@ -2046,6 +2251,1806 @@ async def analyze_lease(input: LeaseAnalysisInput):
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lease analysis failed: {str(e)}")
+
+
+# ============== GYM CONTRACT ANALYSIS ==============
+
+class GymRedFlag(BaseModel):
+    name: str
+    severity: str  # "critical", "warning", "info"
+    clause_text: Optional[str]
+    explanation: str
+    protection: str
+
+class GymContractInput(BaseModel):
+    contract_text: str
+    state: Optional[str] = None
+
+class GymContractReport(BaseModel):
+    overall_risk: str  # "high", "medium", "low"
+    risk_score: int
+    gym_name: Optional[str]
+    contract_type: str  # "month-to-month", "annual", "multi-year"
+    monthly_fee: Optional[str]
+    cancellation_difficulty: str  # "easy", "moderate", "hard", "nightmare"
+    red_flags: list[GymRedFlag]
+    state_protections: list[str]
+    summary: str
+    cancellation_guide: str
+
+# State gym protections
+STATE_GYM_PROTECTIONS = {
+    "CA": {
+        "cooling_off": "5-45 days depending on contract value",
+        "relocation_cancel": "25+ miles, max $100 fee",
+        "medical_cancel": "With documentation",
+        "max_term": "No limit",
+        "notes": "Strongest protections in the country"
+    },
+    "NY": {
+        "cooling_off": "3 days",
+        "relocation_cancel": "25+ miles",
+        "medical_cancel": "With documentation",
+        "max_term": "36 months",
+        "max_annual": "$3,600/year",
+        "notes": "15 days to cancel annual renewal"
+    },
+    "NJ": {
+        "cooling_off": "3 days",
+        "relocation_cancel": "25+ miles",
+        "medical_cancel": "With documentation",
+        "max_term": "3 years",
+        "notes": "Strong consumer protections"
+    },
+    "FL": {
+        "cooling_off": "3 business days",
+        "medical_cancel": "With documentation",
+        "max_term": "3 years",
+        "notes": "Excludes weekends and holidays"
+    },
+    "TX": {
+        "cooling_off": "3 business days",
+        "notes": "Applies to registered health spas"
+    },
+    "MA": {
+        "cooling_off": "3 business days",
+        "relocation_cancel": "25+ miles with pro-rata refund",
+        "notes": "No EFT requirement allowed"
+    }
+}
+
+GYM_RED_FLAGS = {
+    "in_person_cancel": {
+        "name": "In-Person Cancellation Only",
+        "keywords": ["in person", "visit", "home club", "location"],
+        "severity": "critical",
+        "explanation": "You can only cancel by physically going to the gym. FTC sued LA Fitness for this exact practice in 2025.",
+        "protection": "Check if your state requires alternative cancellation methods. Send certified mail anyway and document everything."
+    },
+    "certified_mail_only": {
+        "name": "Certified Mail Required",
+        "keywords": ["certified mail", "registered mail", "return receipt"],
+        "severity": "warning",
+        "explanation": "They're making it deliberately inconvenient to cancel. You have to go to the post office.",
+        "protection": "Send certified mail with return receipt. Keep the receipt forever."
+    },
+    "long_notice_period": {
+        "name": "Excessive Notice Period",
+        "keywords": ["30 days", "60 days", "prior to billing"],
+        "severity": "warning",
+        "explanation": "Miss the window by a day and you're locked in for another month or year.",
+        "protection": "Set calendar reminders. Document when you sent cancellation notice."
+    },
+    "auto_renewal": {
+        "name": "Automatic Renewal",
+        "keywords": ["automatically renew", "auto-renew", "continuous", "successive"],
+        "severity": "warning",
+        "explanation": "Your contract keeps going unless you actively stop it during a narrow window.",
+        "protection": "Set reminder 60 days before renewal. Check your state's renewal notification requirements."
+    },
+    "annual_fee": {
+        "name": "Hidden Annual Fee",
+        "keywords": ["annual fee", "enhancement fee", "yearly fee", "maintenance fee"],
+        "severity": "warning",
+        "explanation": "Separate from monthly dues - often buried in the contract. Planet Fitness charges $49.99/year on top of monthly fees.",
+        "protection": "Calculate total annual cost including all fees before signing."
+    },
+    "no_freeze": {
+        "name": "No Freeze/Pause Option",
+        "keywords": [],  # Absence detection
+        "severity": "warning",
+        "explanation": "If you get injured or travel, you keep paying.",
+        "protection": "Negotiate freeze terms before signing. Most gyms offer this but don't advertise it."
+    },
+    "early_termination_fee": {
+        "name": "Early Termination Fee",
+        "keywords": ["early termination", "buyout", "remaining balance", "cancellation fee"],
+        "severity": "warning",
+        "explanation": "You may owe hundreds of dollars to exit the contract early.",
+        "protection": "Check if fee exceeds your state's legal cap. Some states limit these fees."
+    },
+    "arbitration_clause": {
+        "name": "Forced Arbitration",
+        "keywords": ["arbitration", "waive", "class action", "jury trial"],
+        "severity": "warning",
+        "explanation": "You can't sue them or join a class action lawsuit - you have to go to private arbitration where they have the advantage.",
+        "protection": "This is increasingly common. You may be able to opt out within 30 days of signing."
+    },
+    "personal_training_separate": {
+        "name": "Personal Training is Separate",
+        "keywords": ["personal training", "separate agreement", "pt contract"],
+        "severity": "info",
+        "explanation": "Canceling your membership does NOT cancel personal training. You could owe thousands.",
+        "protection": "Review and cancel personal training separately. PT contracts often have stricter terms."
+    }
+}
+
+
+def mock_gym_analysis(contract_text: str, state: str = None) -> dict:
+    """Generate mock gym contract analysis for testing"""
+    text_lower = contract_text.lower()
+
+    red_flags = []
+    risk_score = 30
+
+    # Check for red flags
+    if 'in person' in text_lower or 'visit' in text_lower and 'cancel' in text_lower:
+        red_flags.append({
+            "name": "In-Person Cancellation Only",
+            "severity": "critical",
+            "clause_text": "Cancellation requests must be made in person at your home club location...",
+            "explanation": "You can only cancel by physically going to the gym. The FTC sued LA Fitness for this exact practice in August 2025.",
+            "protection": "Check your state laws. Many states require alternative cancellation methods. Send certified mail anyway and keep records."
+        })
+        risk_score += 25
+
+    if 'certified mail' in text_lower:
+        red_flags.append({
+            "name": "Certified Mail Required",
+            "severity": "warning",
+            "clause_text": "Written notice via certified mail to our corporate office...",
+            "explanation": "They want you to go to the post office and pay for certified mail just to cancel.",
+            "protection": "Do it. Keep the receipt. It's your proof they received it."
+        })
+        risk_score += 10
+
+    if 'automatically renew' in text_lower or 'auto-renew' in text_lower:
+        red_flags.append({
+            "name": "Automatic Renewal Trap",
+            "severity": "warning",
+            "clause_text": "This agreement will automatically renew for successive monthly terms...",
+            "explanation": "Your membership keeps going forever unless you actively cancel during the right window.",
+            "protection": "Set calendar reminders 60 days before any renewal date. Know the exact cancellation window."
+        })
+        risk_score += 15
+
+    if 'annual fee' in text_lower or 'enhancement fee' in text_lower:
+        red_flags.append({
+            "name": "Hidden Annual Fee",
+            "severity": "warning",
+            "clause_text": "Annual Enhancement Fee of $49.99 will be charged on...",
+            "explanation": "This is on TOP of your monthly dues. They sneak it in once a year.",
+            "protection": "Add this to your total annual cost calculation. Ask when it's charged so it doesn't surprise you."
+        })
+        risk_score += 10
+
+    if 'arbitration' in text_lower:
+        red_flags.append({
+            "name": "Forced Arbitration",
+            "severity": "warning",
+            "clause_text": "Any disputes shall be resolved through binding arbitration...",
+            "explanation": "You can't sue them or join a class action. Arbitration typically favors the company.",
+            "protection": "Look for opt-out provisions. Some contracts let you opt out within 30 days."
+        })
+        risk_score += 10
+
+    if 'early termination' in text_lower or 'buyout' in text_lower:
+        red_flags.append({
+            "name": "Early Termination Fee",
+            "severity": "warning",
+            "clause_text": "Early termination requires payment of remaining contract balance...",
+            "explanation": "Want out early? That'll cost you. Could be hundreds of dollars.",
+            "protection": "Check your state's limits on these fees. Some states cap them."
+        })
+        risk_score += 15
+
+    # Check for missing protections
+    if 'freeze' not in text_lower and 'pause' not in text_lower:
+        red_flags.append({
+            "name": "No Freeze Option Mentioned",
+            "severity": "info",
+            "clause_text": None,
+            "explanation": "The contract doesn't mention freezing your membership. If you get injured or travel, you may keep paying.",
+            "protection": "Ask about freeze policies before signing. Most gyms offer this but hide it."
+        })
+        risk_score += 5
+
+    # Get state protections
+    state_protections = []
+    if state and state.upper() in STATE_GYM_PROTECTIONS:
+        state_info = STATE_GYM_PROTECTIONS[state.upper()]
+        state_protections.append(f"Cooling-off period: {state_info.get('cooling_off', 'Check local laws')}")
+        if 'relocation_cancel' in state_info:
+            state_protections.append(f"Relocation cancellation: {state_info['relocation_cancel']}")
+        if 'max_term' in state_info:
+            state_protections.append(f"Maximum contract term: {state_info['max_term']}")
+        if 'notes' in state_info:
+            state_protections.append(state_info['notes'])
+
+    # Determine difficulty
+    critical_count = len([r for r in red_flags if r['severity'] == 'critical'])
+    if critical_count > 0:
+        cancellation_difficulty = "nightmare"
+    elif risk_score >= 60:
+        cancellation_difficulty = "hard"
+    elif risk_score >= 40:
+        cancellation_difficulty = "moderate"
+    else:
+        cancellation_difficulty = "easy"
+
+    # Determine contract type
+    if 'month-to-month' in text_lower or 'monthly' in text_lower and 'no commitment' in text_lower:
+        contract_type = "month-to-month"
+    elif '12 month' in text_lower or 'one year' in text_lower or 'annual' in text_lower:
+        contract_type = "annual"
+    elif '24 month' in text_lower or 'two year' in text_lower:
+        contract_type = "multi-year"
+    else:
+        contract_type = "unknown"
+
+    # Generate summary
+    if critical_count > 0:
+        summary = f"This gym contract is designed to trap you. {critical_count} critical issue(s) will make cancellation extremely difficult. "
+    elif risk_score >= 50:
+        summary = "This contract has several concerning clauses that could cost you money or make cancellation difficult. "
+    else:
+        summary = "This contract is relatively standard, but watch the renewal terms. "
+
+    summary += f"Cancellation difficulty: {cancellation_difficulty.upper()}."
+
+    # Generate cancellation guide
+    guide = """HOW TO CANCEL THIS GYM MEMBERSHIP:
+
+1. CHECK YOUR STATE LAWS
+   - Look up your state's gym membership laws
+   - Know your cooling-off period (often 3-5 days)
+   - Check if your state requires alternative cancellation methods
+
+2. DOCUMENT EVERYTHING
+   - Screenshot all contract terms
+   - Save all payment receipts
+   - Record dates of all communication
+
+3. SEND WRITTEN NOTICE
+   - Even if they say "in person only", send certified mail
+   - Include: name, member ID, request to cancel, effective date
+   - Keep the certified mail receipt
+
+4. FOLLOW UP
+   - Call to confirm receipt
+   - Get confirmation number/name of rep
+   - Document the call
+
+5. MONITOR YOUR ACCOUNTS
+   - Watch for unauthorized charges after cancellation
+   - Dispute any post-cancellation charges with your bank
+   - File complaints with your state AG if they keep charging
+
+6. IF THEY WON'T STOP:
+   - File complaint: State Attorney General
+   - File complaint: FTC (ReportFraud.ftc.gov)
+   - File complaint: BBB
+   - Consider credit card chargeback for unauthorized charges
+"""
+
+    return {
+        "overall_risk": "high" if risk_score >= 60 else "medium" if risk_score >= 40 else "low",
+        "risk_score": min(100, risk_score),
+        "gym_name": None,
+        "contract_type": contract_type,
+        "monthly_fee": None,
+        "cancellation_difficulty": cancellation_difficulty,
+        "red_flags": red_flags,
+        "state_protections": state_protections,
+        "summary": summary,
+        "cancellation_guide": guide
+    }
+
+
+GYM_ANALYSIS_PROMPT = """You are a consumer protection expert analyzing gym and fitness membership contracts.
+
+Your job is to identify clauses that could "fuck" the member - terms that make cancellation difficult, hidden fees, or traps.
+
+CONTRACT TEXT:
+<<CONTRACT>>
+
+STATE: <<STATE>>
+
+STATE GYM LAWS:
+<<STATE_LAWS>>
+
+RED FLAGS TO CHECK:
+<<RED_FLAGS>>
+
+Return JSON:
+{
+    "overall_risk": "high" | "medium" | "low",
+    "risk_score": 0-100 (100 = nightmare contract),
+    "gym_name": "Name if found",
+    "contract_type": "month-to-month" | "annual" | "multi-year" | "unknown",
+    "monthly_fee": "$XX.XX if found",
+    "cancellation_difficulty": "easy" | "moderate" | "hard" | "nightmare",
+    "red_flags": [
+        {
+            "name": "Issue name",
+            "severity": "critical" | "warning" | "info",
+            "clause_text": "The actual contract text",
+            "explanation": "Why this fucks you (plain language)",
+            "protection": "What to do about it"
+        }
+    ],
+    "state_protections": ["List of relevant state protections"],
+    "summary": "2-3 sentence summary of how bad this contract is",
+    "cancellation_guide": "Step-by-step guide to actually cancel this specific membership"
+}
+
+Be direct. Use phrases like "This means..." and "You're agreeing to..."
+Return ONLY valid JSON."""
+
+
+@app.post("/api/analyze-gym", response_model=GymContractReport)
+async def analyze_gym_contract(input: GymContractInput):
+    """Analyze a gym membership contract for red flags"""
+    try:
+        if MOCK_MODE:
+            result = mock_gym_analysis(input.contract_text, input.state)
+            return GymContractReport(**result)
+
+        client = get_client()
+
+        # Get state laws
+        state_laws = STATE_GYM_PROTECTIONS.get(input.state.upper() if input.state else "", {})
+
+        prompt = GYM_ANALYSIS_PROMPT.replace("<<CONTRACT>>", input.contract_text[:15000])
+        prompt = prompt.replace("<<STATE>>", input.state or "Not specified")
+        prompt = prompt.replace("<<STATE_LAWS>>", json.dumps(state_laws, indent=2))
+        prompt = prompt.replace("<<RED_FLAGS>>", json.dumps(GYM_RED_FLAGS, indent=2))
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        result = json.loads(response_text.strip())
+        return GymContractReport(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gym contract analysis failed: {str(e)}")
+
+
+# ============== EMPLOYMENT CONTRACT ANALYSIS ==============
+
+class EmploymentRedFlag(BaseModel):
+    name: str
+    severity: str
+    clause_text: Optional[str]
+    explanation: str
+    protection: str
+
+class EmploymentContractInput(BaseModel):
+    contract_text: str
+    state: Optional[str] = None
+    salary: Optional[int] = None  # For threshold checking
+
+class EmploymentContractReport(BaseModel):
+    overall_risk: str
+    risk_score: int
+    document_type: str  # "offer_letter", "employment_agreement", "handbook", "severance"
+    has_non_compete: bool
+    non_compete_enforceable: Optional[str]  # "likely", "unlikely", "unknown"
+    has_arbitration: bool
+    has_ip_assignment: bool
+    red_flags: list[EmploymentRedFlag]
+    state_notes: list[str]
+    summary: str
+    negotiation_points: str
+
+# States that ban/restrict non-competes
+NON_COMPETE_STATES = {
+    "CA": {"status": "BANNED", "notes": "Non-competes void. Employers must notify employees of this."},
+    "MN": {"status": "BANNED", "notes": "Banned effective July 2023."},
+    "ND": {"status": "BANNED", "notes": "Non-competes unenforceable."},
+    "OK": {"status": "BANNED", "notes": "Non-competes generally void."},
+    "CO": {"status": "THRESHOLD", "threshold": 127091, "notes": "Only enforceable above $127,091 salary."},
+    "IL": {"status": "THRESHOLD", "threshold": 75000, "notes": "Only enforceable above $75,000 salary."},
+    "WA": {"status": "THRESHOLD", "threshold": 123394, "notes": "Only enforceable above $123,394 salary."},
+    "ME": {"status": "RESTRICTED", "notes": "Cannot require non-compete before offer. 3-day review period required."},
+    "MA": {"status": "RESTRICTED", "notes": "Max 1 year. Garden leave required. Not for hourly workers."},
+    "OR": {"status": "RESTRICTED", "notes": "Max 18 months. Only for employees earning $113,241+."},
+}
+
+EMPLOYMENT_RED_FLAGS = {
+    "broad_non_compete": {
+        "name": "Overly Broad Non-Compete",
+        "keywords": ["non-compete", "covenant not to compete", "compete with"],
+        "severity": "critical",
+        "explanation": "This could prevent you from working in your industry for years after leaving.",
+        "protection": "Check your state's laws. Negotiate scope, geography, and duration."
+    },
+    "mandatory_arbitration": {
+        "name": "Mandatory Arbitration",
+        "keywords": ["binding arbitration", "arbitration agreement", "waive right to jury"],
+        "severity": "warning",
+        "explanation": "You give up your right to sue. Arbitration typically favors employers who use it repeatedly.",
+        "protection": "Look for opt-out provisions (often within 30 days). Consider negotiating removal."
+    },
+    "class_action_waiver": {
+        "name": "Class Action Waiver",
+        "keywords": ["class action", "collective action", "waive right to participate"],
+        "severity": "warning",
+        "explanation": "You can't join other employees in lawsuits. Makes it expensive to pursue small claims.",
+        "protection": "Some waivers are unenforceable. Consult an employment attorney if concerned."
+    },
+    "broad_ip_assignment": {
+        "name": "Broad IP Assignment",
+        "keywords": ["all inventions", "work product", "assign all rights", "intellectual property"],
+        "severity": "warning",
+        "explanation": "The company may own things you create on your own time, with your own resources.",
+        "protection": "Check state protections (CA, IL, WA, DE, MN, NC, NV). Attach prior inventions list."
+    },
+    "no_moonlighting": {
+        "name": "No Outside Work",
+        "keywords": ["sole employer", "exclusive", "no other employment", "outside business"],
+        "severity": "info",
+        "explanation": "You may not be allowed to do freelance work or side projects.",
+        "protection": "Negotiate explicit carve-outs for non-competing activities."
+    },
+    "clawback_provisions": {
+        "name": "Clawback Provisions",
+        "keywords": ["clawback", "repay", "forfeit", "return bonus"],
+        "severity": "warning",
+        "explanation": "You may have to return bonuses or other compensation if you leave.",
+        "protection": "Understand triggers. Negotiate reasonable vesting schedules."
+    },
+    "garden_leave_unpaid": {
+        "name": "Garden Leave Without Pay",
+        "keywords": ["garden leave", "transition period"],
+        "severity": "critical",
+        "explanation": "You can't work during the transition but they're not paying you.",
+        "protection": "Massachusetts requires 50% pay. Negotiate pay continuation."
+    }
+}
+
+
+def mock_employment_analysis(contract_text: str, state: str = None, salary: int = None) -> dict:
+    """Generate mock employment contract analysis"""
+    text_lower = contract_text.lower()
+
+    red_flags = []
+    risk_score = 20
+    state_notes = []
+
+    # Check state rules
+    has_non_compete = 'non-compete' in text_lower or 'covenant not to compete' in text_lower
+    has_arbitration = 'arbitration' in text_lower
+    has_ip_assignment = 'intellectual property' in text_lower or 'inventions' in text_lower
+
+    non_compete_enforceable = "unknown"
+    if state and state.upper() in NON_COMPETE_STATES:
+        state_info = NON_COMPETE_STATES[state.upper()]
+        if state_info["status"] == "BANNED":
+            non_compete_enforceable = "unlikely"
+            state_notes.append(f"{state.upper()}: {state_info['notes']}")
+        elif state_info["status"] == "THRESHOLD":
+            if salary and salary < state_info["threshold"]:
+                non_compete_enforceable = "unlikely"
+                state_notes.append(f"Your salary (${salary:,}) is below {state.upper()}'s threshold (${state_info['threshold']:,}) - non-compete likely unenforceable")
+            else:
+                non_compete_enforceable = "likely"
+                state_notes.append(f"{state.upper()} threshold: ${state_info['threshold']:,}")
+
+    if has_non_compete:
+        red_flags.append({
+            "name": "Non-Compete Agreement",
+            "severity": "critical" if non_compete_enforceable != "unlikely" else "warning",
+            "clause_text": "Employee agrees not to compete with the Company...",
+            "explanation": "This restricts where you can work after leaving. Could limit your career options for months or years.",
+            "protection": f"Non-compete is {non_compete_enforceable} to be enforceable in {state or 'your state'}. Negotiate shorter duration and narrower scope."
+        })
+        risk_score += 20 if non_compete_enforceable != "unlikely" else 5
+
+    if has_arbitration:
+        red_flags.append({
+            "name": "Mandatory Arbitration",
+            "severity": "warning",
+            "clause_text": "Any disputes shall be resolved through binding arbitration...",
+            "explanation": "You're giving up your right to sue in court or join class actions. Arbitration typically favors repeat-player employers.",
+            "protection": "Look for an opt-out provision - you often have 30 days to opt out after signing."
+        })
+        risk_score += 15
+
+    if 'class action' in text_lower and 'waive' in text_lower:
+        red_flags.append({
+            "name": "Class Action Waiver",
+            "severity": "warning",
+            "clause_text": "Employee waives right to participate in class or collective actions...",
+            "explanation": "You can't join other employees in lawsuits. This makes it economically unfeasible to pursue small claims.",
+            "protection": "Some waivers are unenforceable for certain claims. NLRA-protected activity cannot be waived."
+        })
+        risk_score += 10
+
+    if has_ip_assignment:
+        if 'all inventions' in text_lower or 'during employment' in text_lower:
+            red_flags.append({
+                "name": "Broad IP Assignment",
+                "severity": "warning",
+                "clause_text": "Employee assigns all inventions conceived during employment...",
+                "explanation": "The company may claim ownership of things you create on your own time, with your own resources.",
+                "protection": "CA, IL, WA, DE, MN, NC, NV protect personal inventions made on your own time. Attach a prior inventions schedule."
+            })
+            risk_score += 10
+
+    if 'at-will' in text_lower:
+        red_flags.append({
+            "name": "At-Will Employment",
+            "severity": "info",
+            "clause_text": "Employment is at-will and may be terminated at any time...",
+            "explanation": "Standard language - they can fire you anytime for any legal reason (and you can quit anytime).",
+            "protection": "This is normal. Focus on severance and notice period terms."
+        })
+
+    # Determine document type
+    if 'offer' in text_lower and 'accept' in text_lower:
+        doc_type = "offer_letter"
+    elif 'severance' in text_lower or 'separation' in text_lower:
+        doc_type = "severance"
+    elif 'handbook' in text_lower or 'policy' in text_lower:
+        doc_type = "handbook"
+    else:
+        doc_type = "employment_agreement"
+
+    # Generate summary
+    critical_count = len([r for r in red_flags if r['severity'] == 'critical'])
+    if critical_count > 0:
+        summary = f"This contract has {critical_count} critical issue(s) that could significantly limit your future options. "
+    else:
+        summary = "This contract has some standard restrictions you should understand. "
+
+    if has_non_compete and non_compete_enforceable == "unlikely":
+        summary += f"Good news: the non-compete is likely unenforceable in {state or 'your state'}."
+    elif has_non_compete:
+        summary += "The non-compete could limit where you work after leaving."
+
+    # Generate negotiation points
+    negotiation = """POINTS TO NEGOTIATE:
+
+"""
+    if has_non_compete:
+        negotiation += """1. NON-COMPETE
+   - Shorten duration (1 year max is reasonable)
+   - Narrow geographic scope to where you actually work
+   - Define "competitors" specifically (named companies only)
+   - Add carve-outs for non-competing roles
+
+"""
+    if has_arbitration:
+        negotiation += """2. ARBITRATION
+   - Request opt-out provision (30 days to decide)
+   - Or negotiate removal entirely
+   - At minimum, ensure costs are split fairly
+
+"""
+    if has_ip_assignment:
+        negotiation += """3. IP ASSIGNMENT
+   - Limit to inventions made using company resources
+   - Limit to inventions related to company business
+   - Attach prior inventions schedule
+   - Retain rights to personal projects on own time
+
+"""
+    negotiation += """GENERAL TIPS:
+- Get all promises in writing (don't rely on verbal agreements)
+- Ask for time to review (never sign same day)
+- Consider having an employment attorney review
+- Document everything during employment
+"""
+
+    return {
+        "overall_risk": "high" if risk_score >= 50 else "medium" if risk_score >= 30 else "low",
+        "risk_score": min(100, risk_score),
+        "document_type": doc_type,
+        "has_non_compete": has_non_compete,
+        "non_compete_enforceable": non_compete_enforceable if has_non_compete else None,
+        "has_arbitration": has_arbitration,
+        "has_ip_assignment": has_ip_assignment,
+        "red_flags": red_flags,
+        "state_notes": state_notes,
+        "summary": summary,
+        "negotiation_points": negotiation
+    }
+
+
+EMPLOYMENT_ANALYSIS_PROMPT = """You are an employment attorney helping an employee understand their employment contract.
+
+Your job is to identify clauses that could limit their career options or rights.
+
+CONTRACT TEXT:
+<<CONTRACT>>
+
+STATE: <<STATE>>
+SALARY: <<SALARY>>
+
+NON-COMPETE STATE RULES:
+<<STATE_RULES>>
+
+RED FLAGS TO CHECK:
+<<RED_FLAGS>>
+
+Return JSON:
+{
+    "overall_risk": "high" | "medium" | "low",
+    "risk_score": 0-100,
+    "document_type": "offer_letter" | "employment_agreement" | "handbook" | "severance",
+    "has_non_compete": true/false,
+    "non_compete_enforceable": "likely" | "unlikely" | "unknown",
+    "has_arbitration": true/false,
+    "has_ip_assignment": true/false,
+    "red_flags": [
+        {
+            "name": "Issue name",
+            "severity": "critical" | "warning" | "info",
+            "clause_text": "The actual contract text",
+            "explanation": "Why this matters (plain language)",
+            "protection": "What to do about it"
+        }
+    ],
+    "state_notes": ["State-specific information"],
+    "summary": "2-3 sentence summary",
+    "negotiation_points": "Points the employee could negotiate"
+}
+
+Be direct and practical.
+Return ONLY valid JSON."""
+
+
+@app.post("/api/analyze-employment", response_model=EmploymentContractReport)
+async def analyze_employment_contract(input: EmploymentContractInput):
+    """Analyze an employment contract for problematic terms"""
+    try:
+        if MOCK_MODE:
+            result = mock_employment_analysis(input.contract_text, input.state, input.salary)
+            return EmploymentContractReport(**result)
+
+        client = get_client()
+
+        state_rules = NON_COMPETE_STATES.get(input.state.upper() if input.state else "", {})
+
+        prompt = EMPLOYMENT_ANALYSIS_PROMPT.replace("<<CONTRACT>>", input.contract_text[:15000])
+        prompt = prompt.replace("<<STATE>>", input.state or "Not specified")
+        prompt = prompt.replace("<<SALARY>>", f"${input.salary:,}" if input.salary else "Not specified")
+        prompt = prompt.replace("<<STATE_RULES>>", json.dumps(state_rules, indent=2))
+        prompt = prompt.replace("<<RED_FLAGS>>", json.dumps(EMPLOYMENT_RED_FLAGS, indent=2))
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        result = json.loads(response_text.strip())
+        return EmploymentContractReport(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Employment contract analysis failed: {str(e)}")
+
+
+# ============== FREELANCER CONTRACT ANALYSIS ==============
+
+class FreelancerRedFlag(BaseModel):
+    name: str
+    severity: str
+    clause_text: Optional[str]
+    explanation: str
+    protection: str
+
+class FreelancerContractInput(BaseModel):
+    contract_text: str
+    project_value: Optional[int] = None
+
+class FreelancerContractReport(BaseModel):
+    overall_risk: str
+    risk_score: int
+    contract_type: str  # "project", "retainer", "sow"
+    payment_terms: Optional[str]
+    ip_ownership: str  # "work_for_hire", "license", "assignment", "unclear"
+    has_kill_fee: bool
+    revision_limit: Optional[str]
+    red_flags: list[FreelancerRedFlag]
+    missing_protections: list[str]
+    summary: str
+    suggested_changes: str
+
+
+def mock_freelancer_analysis(contract_text: str, project_value: int = None) -> dict:
+    """Generate mock freelancer contract analysis"""
+    text_lower = contract_text.lower()
+
+    red_flags = []
+    risk_score = 25
+    missing_protections = []
+
+    # Payment terms
+    payment_terms = None
+    if 'net 90' in text_lower:
+        payment_terms = "Net 90"
+        red_flags.append({
+            "name": "Net 90 Payment Terms",
+            "severity": "critical",
+            "clause_text": "Payment due within 90 days of invoice...",
+            "explanation": "You're waiting 3 months to get paid. That's a loan to your client.",
+            "protection": "Counter with Net-30 maximum. Require 50% deposit upfront."
+        })
+        risk_score += 25
+    elif 'net 60' in text_lower:
+        payment_terms = "Net 60"
+        red_flags.append({
+            "name": "Net 60 Payment Terms",
+            "severity": "warning",
+            "clause_text": "Payment due within 60 days...",
+            "explanation": "Two months is a long time to wait for your money.",
+            "protection": "Counter with Net-30. Request deposit for large projects."
+        })
+        risk_score += 15
+    elif 'net 30' in text_lower:
+        payment_terms = "Net 30"
+
+    # IP ownership
+    ip_ownership = "unclear"
+    if 'work for hire' in text_lower or 'work made for hire' in text_lower:
+        ip_ownership = "work_for_hire"
+        red_flags.append({
+            "name": "Work For Hire",
+            "severity": "warning",
+            "clause_text": "All work product shall be considered work made for hire...",
+            "explanation": "Client owns everything from the moment you create it. You can't use it in your portfolio without permission.",
+            "protection": "Ensure you retain portfolio rights. If giving up all rights, charge a premium (2-3x)."
+        })
+        risk_score += 10
+    elif 'assigns all' in text_lower or 'assign all rights' in text_lower:
+        ip_ownership = "assignment"
+        risk_score += 10
+
+    # Kill fee
+    has_kill_fee = 'kill fee' in text_lower or 'cancellation fee' in text_lower
+    if not has_kill_fee and 'cancel' not in text_lower:
+        missing_protections.append("No kill fee - client can cancel without paying")
+        risk_score += 15
+
+    # Revisions
+    revision_limit = None
+    if 'unlimited revision' in text_lower:
+        revision_limit = "Unlimited"
+        red_flags.append({
+            "name": "Unlimited Revisions",
+            "severity": "critical",
+            "clause_text": "Contractor shall provide unlimited revisions until Client approval...",
+            "explanation": "You could be revising forever. There's no end to this.",
+            "protection": "Negotiate 2-3 revision rounds. Additional revisions at hourly rate."
+        })
+        risk_score += 25
+
+    # Non-compete
+    if 'non-compete' in text_lower or 'not compete' in text_lower:
+        red_flags.append({
+            "name": "Non-Compete Clause",
+            "severity": "critical",
+            "clause_text": "Contractor shall not provide services to competitors...",
+            "explanation": "This could prevent you from working with other clients in this industry.",
+            "protection": "Resist non-competes. If required, limit to specific named companies and short duration."
+        })
+        risk_score += 20
+
+    # Indemnification
+    if 'indemnify' in text_lower and 'hold harmless' in text_lower:
+        red_flags.append({
+            "name": "One-Sided Indemnification",
+            "severity": "warning",
+            "clause_text": "Contractor shall indemnify and hold harmless Client...",
+            "explanation": "You may be on the hook for the client's problems, not just your own.",
+            "protection": "Make indemnification mutual. Cap liability at fees paid."
+        })
+        risk_score += 10
+
+    # Missing protections
+    if 'deposit' not in text_lower and 'milestone' not in text_lower:
+        missing_protections.append("No deposit or milestone payments")
+    if 'late fee' not in text_lower and 'interest' not in text_lower:
+        missing_protections.append("No late payment penalties")
+    if 'portfolio' not in text_lower and 'display' not in text_lower:
+        missing_protections.append("No portfolio rights mentioned")
+
+    # Determine contract type
+    if 'statement of work' in text_lower or 'sow' in text_lower:
+        contract_type = "sow"
+    elif 'retainer' in text_lower:
+        contract_type = "retainer"
+    else:
+        contract_type = "project"
+
+    # Generate summary
+    critical_count = len([r for r in red_flags if r['severity'] == 'critical'])
+    if critical_count > 0:
+        summary = f"This contract has {critical_count} critical issue(s) that could seriously hurt you. "
+    else:
+        summary = "This contract has some concerning terms but nothing catastrophic. "
+
+    if missing_protections:
+        summary += f"It's also missing {len(missing_protections)} standard protections."
+
+    # Generate suggestions
+    suggestions = """CHANGES TO REQUEST:
+
+"""
+    if payment_terms in ["Net 60", "Net 90"]:
+        suggestions += """1. PAYMENT TERMS
+   - Change to Net-30 maximum
+   - Add: "50% deposit due upon signing"
+   - Add: "Late payments incur 1.5% monthly interest"
+
+"""
+    if not has_kill_fee:
+        suggestions += """2. KILL FEE
+   - Add: "If Client cancels after work begins, Client shall pay:
+     - 25% of total if cancelled before delivery
+     - 50% of total if cancelled after partial delivery
+     - 100% of total if cancelled after full delivery"
+
+"""
+    if revision_limit == "Unlimited":
+        suggestions += """3. REVISION LIMITS
+   - Change to: "This agreement includes 2 rounds of revisions.
+     Additional revisions billed at $[X]/hour."
+
+"""
+    if ip_ownership == "work_for_hire":
+        suggestions += """4. PORTFOLIO RIGHTS
+   - Add: "Contractor retains the right to display final deliverables
+     in portfolio and self-promotional materials after public release."
+
+"""
+    suggestions += """GENERAL TIPS:
+- Never start work without a signed contract
+- Get deposit before starting large projects
+- Keep records of all deliveries and communications
+- Invoice immediately upon delivery
+"""
+
+    return {
+        "overall_risk": "high" if risk_score >= 50 else "medium" if risk_score >= 30 else "low",
+        "risk_score": min(100, risk_score),
+        "contract_type": contract_type,
+        "payment_terms": payment_terms,
+        "ip_ownership": ip_ownership,
+        "has_kill_fee": has_kill_fee,
+        "revision_limit": revision_limit,
+        "red_flags": red_flags,
+        "missing_protections": missing_protections,
+        "summary": summary,
+        "suggested_changes": suggestions
+    }
+
+
+@app.post("/api/analyze-freelancer", response_model=FreelancerContractReport)
+async def analyze_freelancer_contract(input: FreelancerContractInput):
+    """Analyze a freelancer/contractor agreement"""
+    try:
+        if MOCK_MODE:
+            result = mock_freelancer_analysis(input.contract_text, input.project_value)
+            return FreelancerContractReport(**result)
+
+        client = get_client()
+
+        prompt = f"""You are a contract expert helping freelancers understand client agreements.
+
+Analyze this freelancer contract for problems:
+
+CONTRACT:
+{input.contract_text[:15000]}
+
+PROJECT VALUE: {f"${input.project_value:,}" if input.project_value else "Not specified"}
+
+Return JSON:
+{{
+    "overall_risk": "high" | "medium" | "low",
+    "risk_score": 0-100,
+    "contract_type": "project" | "retainer" | "sow",
+    "payment_terms": "Net 30" etc or null,
+    "ip_ownership": "work_for_hire" | "license" | "assignment" | "unclear",
+    "has_kill_fee": true/false,
+    "revision_limit": "2 rounds" or "Unlimited" or null,
+    "red_flags": [{{
+        "name": "Issue",
+        "severity": "critical" | "warning" | "info",
+        "clause_text": "Actual text",
+        "explanation": "Plain language explanation",
+        "protection": "What to do"
+    }}],
+    "missing_protections": ["Things that should be in the contract but aren't"],
+    "summary": "2-3 sentence summary",
+    "suggested_changes": "Specific language to request"
+}}
+
+Be direct. Focus on payment, IP, scope, and liability.
+Return ONLY valid JSON."""
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        result = json.loads(response_text.strip())
+        return FreelancerContractReport(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Freelancer contract analysis failed: {str(e)}")
+
+
+# ============== INFLUENCER CONTRACT ANALYSIS ==============
+
+class InfluencerRedFlag(BaseModel):
+    name: str
+    severity: str
+    clause_text: Optional[str]
+    explanation: str
+    protection: str
+
+class InfluencerContractInput(BaseModel):
+    contract_text: str
+    base_rate: Optional[int] = None  # To calculate fair usage premiums
+
+class InfluencerContractReport(BaseModel):
+    overall_risk: str
+    risk_score: int
+    brand_name: Optional[str]
+    campaign_type: str  # "one_off", "ongoing", "ambassador"
+    usage_rights_duration: Optional[str]
+    exclusivity_scope: Optional[str]
+    payment_terms: Optional[str]
+    has_perpetual_rights: bool
+    has_ai_training_rights: bool
+    ftc_compliance: str  # "addressed", "unclear", "missing"
+    red_flags: list[InfluencerRedFlag]
+    summary: str
+    negotiation_script: str
+
+
+def mock_influencer_analysis(contract_text: str, base_rate: int = None) -> dict:
+    """Generate mock influencer contract analysis"""
+    text_lower = contract_text.lower()
+
+    red_flags = []
+    risk_score = 25
+
+    # Check for perpetual rights
+    has_perpetual_rights = 'perpetuity' in text_lower or 'forever' in text_lower or 'unlimited duration' in text_lower
+    if has_perpetual_rights:
+        red_flags.append({
+            "name": "Perpetual Usage Rights",
+            "severity": "critical",
+            "clause_text": "Brand is granted rights in perpetuity...",
+            "explanation": "They can use your content FOREVER. No time limit. This should cost 3x your normal rate.",
+            "protection": "Counter with 90-day usage. Perpetual rights = 100-150% premium minimum."
+        })
+        risk_score += 25
+
+    # Check usage duration
+    usage_rights_duration = None
+    if has_perpetual_rights:
+        usage_rights_duration = "Perpetual (FOREVER)"
+    elif '12 month' in text_lower or 'one year' in text_lower:
+        usage_rights_duration = "12 months"
+        red_flags.append({
+            "name": "12-Month Usage Rights",
+            "severity": "warning",
+            "clause_text": "Usage rights for 12 months from posting date...",
+            "explanation": "A year is long. Standard is 30-90 days. This should cost more.",
+            "protection": "Negotiate additional compensation for extended usage."
+        })
+        risk_score += 10
+    elif '90 day' in text_lower or '3 month' in text_lower:
+        usage_rights_duration = "90 days"
+
+    # Check for AI training rights
+    has_ai_training_rights = 'machine learning' in text_lower or 'ai training' in text_lower or 'artificial intelligence' in text_lower
+    if has_ai_training_rights:
+        red_flags.append({
+            "name": "AI Training Rights",
+            "severity": "critical",
+            "clause_text": "Content may be used for machine learning or AI model training...",
+            "explanation": "They want to feed your content to AI. Your likeness, voice, style could be replicated.",
+            "protection": "Remove this clause entirely. This is a new and dangerous term."
+        })
+        risk_score += 20
+
+    # Check exclusivity
+    exclusivity_scope = None
+    if 'exclusiv' in text_lower:
+        if 'category' in text_lower:
+            exclusivity_scope = "Category-wide"
+        elif 'competitor' in text_lower:
+            exclusivity_scope = "Named competitors"
+        else:
+            exclusivity_scope = "Broad/unclear"
+
+        if 'including but not limited to' in text_lower:
+            red_flags.append({
+                "name": "Vague Exclusivity",
+                "severity": "critical",
+                "clause_text": "Creator shall not work with competitors including but not limited to...",
+                "explanation": "'Including but not limited to' means they can block ANY deal they want. Total trap.",
+                "protection": "Demand a specific named list of competitors. No 'including but not limited to.'"
+            })
+            risk_score += 20
+
+    # Check FTC compliance
+    ftc_compliance = "missing"
+    if '#ad' in text_lower or 'disclose' in text_lower or 'ftc' in text_lower:
+        ftc_compliance = "addressed"
+    elif 'partner' in text_lower or 'sponsor' in text_lower:
+        ftc_compliance = "unclear"
+        red_flags.append({
+            "name": "Unclear FTC Disclosure Terms",
+            "severity": "warning",
+            "clause_text": None,
+            "explanation": "The contract doesn't clearly specify FTC disclosure requirements. You could be liable for fines.",
+            "protection": "Add clear disclosure requirements. Use #ad or #sponsored. Both parties share responsibility."
+        })
+        risk_score += 10
+    else:
+        red_flags.append({
+            "name": "No FTC Compliance Mentioned",
+            "severity": "warning",
+            "clause_text": None,
+            "explanation": "No mention of disclosure requirements. FTC fines are $53,000+ per violation.",
+            "protection": "Add disclosure clause. Specify who's responsible. You need this protection."
+        })
+        risk_score += 10
+
+    # Check payment terms
+    payment_terms = None
+    if 'net 90' in text_lower:
+        payment_terms = "Net 90"
+        red_flags.append({
+            "name": "Net 90 Payment",
+            "severity": "critical",
+            "clause_text": "Payment within 90 days of campaign completion...",
+            "explanation": "Three months to get paid?! That's ridiculous. You've already done the work.",
+            "protection": "Counter with Net-30. Request 50% upfront."
+        })
+        risk_score += 20
+    elif 'net 60' in text_lower:
+        payment_terms = "Net 60"
+        risk_score += 10
+
+    # Check revisions
+    if 'unlimited revision' in text_lower:
+        red_flags.append({
+            "name": "Unlimited Revisions",
+            "severity": "critical",
+            "clause_text": "Creator shall make revisions until Brand approval...",
+            "explanation": "You could be creating content forever. There's no end to this.",
+            "protection": "Cap at 2 revision rounds. Additional revisions = additional fee."
+        })
+        risk_score += 15
+
+    # Check morality clause
+    if 'morality' in text_lower or 'moral' in text_lower or 'public disrepute' in text_lower:
+        if 'brand' not in text_lower or 'mutual' not in text_lower:
+            red_flags.append({
+                "name": "One-Sided Morality Clause",
+                "severity": "warning",
+                "clause_text": "If Creator engages in conduct that damages Brand reputation...",
+                "explanation": "They can terminate if YOU do something controversial, but what if THEY do? No protection for you.",
+                "protection": "Make it mutual. If the brand has a scandal, you can terminate too."
+            })
+            risk_score += 10
+
+    # Determine campaign type
+    if 'ambassador' in text_lower:
+        campaign_type = "ambassador"
+    elif 'ongoing' in text_lower or 'monthly' in text_lower:
+        campaign_type = "ongoing"
+    else:
+        campaign_type = "one_off"
+
+    # Generate summary
+    critical_count = len([r for r in red_flags if r['severity'] == 'critical'])
+    if critical_count > 0:
+        summary = f"This brand deal has {critical_count} major problem(s) that could cost you money or limit your future deals. "
+    else:
+        summary = "This contract is fairly standard, but there are some terms to negotiate. "
+
+    if has_perpetual_rights:
+        summary += "The perpetual rights clause is a big deal - don't accept this without significant extra pay."
+
+    # Generate negotiation script
+    script = """WHAT TO SAY TO THE BRAND:
+
+"""
+    if has_perpetual_rights:
+        script += """RE: USAGE RIGHTS
+"I'm happy to grant extended usage, but perpetual rights require additional
+compensation. My rate for perpetual rights is [3x base rate]. Alternatively,
+I can offer 90-day usage at my standard rate with renewal options."
+
+"""
+    if exclusivity_scope:
+        script += """RE: EXCLUSIVITY
+"I need a specific list of competitors for the exclusivity clause. 'Including
+but not limited to' is too broad and could prevent me from taking legitimate
+work. Please provide named companies only, and let's discuss the exclusivity
+period - my standard is campaign duration plus 30 days."
+
+"""
+    if has_ai_training_rights:
+        script += """RE: AI TRAINING
+"I'm not comfortable with AI training rights at this time. Please remove
+this clause. If this is essential to the campaign, I'd need to understand
+the specific use case and negotiate appropriate compensation."
+
+"""
+    script += """GENERAL TIPS:
+- Never accept first offer on usage rights
+- Exclusivity = extra compensation
+- Get everything in writing
+- Don't sign same day - take time to review
+- Counter-offer is expected - don't be afraid to negotiate
+"""
+
+    return {
+        "overall_risk": "high" if risk_score >= 50 else "medium" if risk_score >= 30 else "low",
+        "risk_score": min(100, risk_score),
+        "brand_name": None,
+        "campaign_type": campaign_type,
+        "usage_rights_duration": usage_rights_duration,
+        "exclusivity_scope": exclusivity_scope,
+        "payment_terms": payment_terms,
+        "has_perpetual_rights": has_perpetual_rights,
+        "has_ai_training_rights": has_ai_training_rights,
+        "ftc_compliance": ftc_compliance,
+        "red_flags": red_flags,
+        "summary": summary,
+        "negotiation_script": script
+    }
+
+
+@app.post("/api/analyze-influencer", response_model=InfluencerContractReport)
+async def analyze_influencer_contract(input: InfluencerContractInput):
+    """Analyze an influencer/sponsorship contract"""
+    try:
+        if MOCK_MODE:
+            result = mock_influencer_analysis(input.contract_text, input.base_rate)
+            return InfluencerContractReport(**result)
+
+        client = get_client()
+
+        prompt = f"""You are an expert helping content creators understand brand deals.
+
+Analyze this influencer contract:
+
+CONTRACT:
+{input.contract_text[:15000]}
+
+BASE RATE: {f"${input.base_rate:,}" if input.base_rate else "Not specified"}
+
+Return JSON:
+{{
+    "overall_risk": "high" | "medium" | "low",
+    "risk_score": 0-100,
+    "brand_name": "Brand name if found",
+    "campaign_type": "one_off" | "ongoing" | "ambassador",
+    "usage_rights_duration": "90 days" or "Perpetual" etc,
+    "exclusivity_scope": "Category-wide" or "Named competitors" or null,
+    "payment_terms": "Net 30" etc or null,
+    "has_perpetual_rights": true/false,
+    "has_ai_training_rights": true/false,
+    "ftc_compliance": "addressed" | "unclear" | "missing",
+    "red_flags": [{{
+        "name": "Issue",
+        "severity": "critical" | "warning" | "info",
+        "clause_text": "Actual text",
+        "explanation": "Plain language, direct",
+        "protection": "What to negotiate"
+    }}],
+    "summary": "2-3 sentences",
+    "negotiation_script": "Exact phrases to use with the brand"
+}}
+
+Be direct. Creators need to understand the real impact.
+Return ONLY valid JSON."""
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        result = json.loads(response_text.strip())
+        return InfluencerContractReport(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Influencer contract analysis failed: {str(e)}")
+
+
+# ============== TIMESHARE CONTRACT ANALYSIS ==============
+
+class TimeshareRedFlag(BaseModel):
+    name: str
+    severity: str
+    clause_text: Optional[str]
+    explanation: str
+    protection: str
+
+class TimeshareContractInput(BaseModel):
+    contract_text: str
+    state: Optional[str] = None
+    purchase_price: Optional[int] = None
+    annual_fee: Optional[int] = None
+
+class TimeshareContractReport(BaseModel):
+    overall_risk: str  # Almost always "high" for timeshares
+    risk_score: int
+    resort_name: Optional[str]
+    ownership_type: str  # "deeded", "right_to_use", "points", "unknown"
+    has_perpetuity_clause: bool
+    rescission_deadline: Optional[str]
+    estimated_10yr_cost: Optional[str]
+    red_flags: list[TimeshareRedFlag]
+    exit_options: list[str]
+    summary: str
+    rescission_letter: str
+
+
+# State rescission periods
+TIMESHARE_RESCISSION = {
+    "AK": {"days": 15, "type": "calendar", "notes": "From receipt of public offering statement"},
+    "DC": {"days": 15, "type": "calendar", "notes": ""},
+    "FL": {"days": 10, "type": "calendar", "notes": "Major timeshare hub"},
+    "MD": {"days": 10, "type": "calendar", "notes": ""},
+    "MI": {"days": 9, "type": "calendar", "notes": "From receipt of disclosure"},
+    "CA": {"days": 7, "type": "calendar", "notes": "Mandates standardized contracts"},
+    "AZ": {"days": 7, "type": "calendar", "notes": ""},
+    "CO": {"days": 5, "type": "calendar", "notes": ""},
+    "NV": {"days": 5, "type": "calendar", "notes": "Until midnight of 5th day"},
+    "AR": {"days": 5, "type": "calendar", "notes": ""},
+    "OH": {"days": 3, "type": "business", "notes": ""},
+    "KS": {"days": 3, "type": "business", "notes": ""},
+    "IN": {"days": 3, "type": "business", "notes": "72 hours"},
+}
+
+
+def mock_timeshare_analysis(contract_text: str, state: str = None, purchase_price: int = None, annual_fee: int = None) -> dict:
+    """Generate mock timeshare contract analysis"""
+    text_lower = contract_text.lower()
+
+    red_flags = []
+    risk_score = 60  # Timeshares start with high risk
+
+    # Check for perpetuity clause
+    has_perpetuity_clause = 'perpetuity' in text_lower or 'heirs' in text_lower or 'forever' in text_lower or 'successors' in text_lower
+    if has_perpetuity_clause:
+        red_flags.append({
+            "name": "Perpetuity Clause",
+            "severity": "critical",
+            "clause_text": "This agreement shall be binding upon Owner's heirs, successors, and assigns in perpetuity...",
+            "explanation": "This obligation NEVER ENDS. It passes to your kids when you die. They inherit your debt.",
+            "protection": "This is nearly impossible to exit. Only 15% of buyers use rescission period. If you just signed, CANCEL NOW."
+        })
+        risk_score += 20
+
+    # Check ownership type
+    ownership_type = "unknown"
+    if 'deeded' in text_lower or 'fee simple' in text_lower:
+        ownership_type = "deeded"
+        red_flags.append({
+            "name": "Deeded Ownership",
+            "severity": "warning",
+            "clause_text": "Owner receives an undivided fractional interest in fee simple...",
+            "explanation": "You own a fraction of real property - which sounds good but means perpetual obligations and harder exit.",
+            "protection": "Deeded ownership is harder to escape than right-to-use."
+        })
+        risk_score += 10
+    elif 'right to use' in text_lower or 'license' in text_lower:
+        ownership_type = "right_to_use"
+        # RTU is slightly better - it expires
+    elif 'points' in text_lower:
+        ownership_type = "points"
+
+    # Check for uncapped maintenance fees
+    if 'maintenance' in text_lower:
+        if 'increase' in text_lower or 'adjust' in text_lower:
+            red_flags.append({
+                "name": "Uncapped Maintenance Fees",
+                "severity": "critical",
+                "clause_text": "Maintenance fees are subject to annual adjustment...",
+                "explanation": "Fees increase 3-8% EVERY YEAR. Average is $1,480/year. In 10 years that could be over $2,000/year.",
+                "protection": "There is no protection. This is how timeshares work. Budget for 50% increase over 10 years."
+            })
+            risk_score += 15
+
+    # Check for special assessments
+    if 'special assessment' in text_lower:
+        red_flags.append({
+            "name": "Special Assessment Authority",
+            "severity": "critical",
+            "clause_text": "The Association may levy special assessments...",
+            "explanation": "They can hit you with surprise bills of $1,000-$3,000+ for 'improvements' or repairs.",
+            "protection": "There is no protection. You must pay or face collection/credit damage."
+        })
+        risk_score += 10
+
+    # Check for rescission period
+    rescission_deadline = None
+    if state and state.upper() in TIMESHARE_RESCISSION:
+        rescission_info = TIMESHARE_RESCISSION[state.upper()]
+        rescission_deadline = f"{rescission_info['days']} {rescission_info['type']} days"
+        red_flags.append({
+            "name": f"Rescission Period: {rescission_deadline}",
+            "severity": "info",
+            "clause_text": None,
+            "explanation": f"You have {rescission_info['days']} {rescission_info['type']} days to cancel and get your money back. After that, you're stuck.",
+            "protection": "CANCEL NOW if you're having second thoughts. Send certified mail TODAY."
+        })
+
+    # Calculate 10-year cost
+    estimated_10yr_cost = None
+    if purchase_price and annual_fee:
+        # Assume 5% annual fee increase
+        total_fees = sum([annual_fee * (1.05 ** year) for year in range(10)])
+        total_cost = purchase_price + total_fees
+        estimated_10yr_cost = f"${total_cost:,.0f}"
+        if total_cost > 50000:
+            red_flags.append({
+                "name": f"10-Year Cost: {estimated_10yr_cost}",
+                "severity": "critical",
+                "clause_text": None,
+                "explanation": f"Purchase (${purchase_price:,}) + 10 years of fees = {estimated_10yr_cost}. You could take a LOT of vacations for that money.",
+                "protection": "Do the math. Compare to just booking hotels/vacation rentals."
+            })
+
+    # Integration clause
+    if 'entire agreement' in text_lower or 'no representations' in text_lower:
+        red_flags.append({
+            "name": "Integration Clause (License to Lie)",
+            "severity": "warning",
+            "clause_text": "This Agreement constitutes the entire agreement... No representations or promises not contained herein shall be binding...",
+            "explanation": "Everything the salesperson promised? Doesn't count. Only what's written in this contract matters.",
+            "protection": "Get ALL verbal promises in writing BEFORE signing. If they won't, assume they were lying."
+        })
+        risk_score += 10
+
+    # Generate exit options
+    exit_options = []
+    if rescission_deadline:
+        exit_options.append(f"RESCISSION: Cancel within {rescission_deadline} via certified mail (FREE)")
+    exit_options.append("DEVELOPER DEED-BACK: Contact developer's exit program (Wyndham Cares, Marriott, etc.) - $200-$1,000")
+    exit_options.append("RESALE: RedWeek.com, TUG2.com - Expect to sell for $0-$1 just to transfer obligation")
+    exit_options.append("ATTORNEY: For misrepresentation claims - $3,000-$7,000")
+    exit_options.append("ARDA: Call (855) 939-1515 for exit assistance")
+    exit_options.append("AVOID: Any 'exit company' demanding large upfront fees - likely a scam")
+
+    # Generate summary
+    summary = "Timeshares are designed to be nearly impossible to exit. "
+    if has_perpetuity_clause:
+        summary += "This one has a perpetuity clause - it passes to your heirs. "
+    if rescission_deadline:
+        summary += f"If you just signed, you have {rescission_deadline} to cancel FOR FREE. Do it now."
+    else:
+        summary += "After the rescission period, your options are very limited."
+
+    # Generate rescission letter
+    rescission_letter = f"""VIA CERTIFIED MAIL - RETURN RECEIPT REQUESTED
+
+Date: [TODAY'S DATE]
+
+To: [RESORT NAME]
+[ADDRESS FROM CONTRACT]
+
+RE: NOTICE OF CANCELLATION / RESCISSION
+Contract Number: [CONTRACT NUMBER]
+Purchase Date: [DATE SIGNED]
+Owner Name(s): [YOUR NAME(S)]
+
+Dear Sir/Madam:
+
+Pursuant to [STATE] law and the terms of the above-referenced contract, I hereby
+exercise my right to rescind and cancel the timeshare purchase agreement.
+
+I am canceling within the statutory rescission period and demand:
+1. Full refund of all monies paid: $[AMOUNT]
+2. Return of any trade-in or exchange property
+3. Cancellation of any financing agreements
+4. Written confirmation of this cancellation
+
+This cancellation is effective immediately upon mailing of this notice.
+Please process my refund within 20 days as required by law.
+
+Sincerely,
+
+[YOUR SIGNATURE]
+[YOUR PRINTED NAME]
+[YOUR ADDRESS]
+[YOUR PHONE]
+
+KEEP THE CERTIFIED MAIL RECEIPT - THIS IS YOUR PROOF"""
+
+    return {
+        "overall_risk": "high" if risk_score >= 60 else "medium",
+        "risk_score": min(100, risk_score),
+        "resort_name": None,
+        "ownership_type": ownership_type,
+        "has_perpetuity_clause": has_perpetuity_clause,
+        "rescission_deadline": rescission_deadline,
+        "estimated_10yr_cost": estimated_10yr_cost,
+        "red_flags": red_flags,
+        "exit_options": exit_options,
+        "summary": summary,
+        "rescission_letter": rescission_letter
+    }
+
+
+@app.post("/api/analyze-timeshare", response_model=TimeshareContractReport)
+async def analyze_timeshare_contract(input: TimeshareContractInput):
+    """Analyze a timeshare contract"""
+    try:
+        if MOCK_MODE:
+            result = mock_timeshare_analysis(
+                input.contract_text,
+                input.state,
+                input.purchase_price,
+                input.annual_fee
+            )
+            return TimeshareContractReport(**result)
+
+        client = get_client()
+
+        rescission_info = TIMESHARE_RESCISSION.get(input.state.upper() if input.state else "", {})
+
+        prompt = f"""You are a consumer protection expert analyzing a timeshare contract.
+
+Your job is to help someone understand what they're getting into (or help them get out).
+
+CONTRACT:
+{input.contract_text[:15000]}
+
+STATE: {input.state or "Not specified"}
+RESCISSION PERIOD: {json.dumps(rescission_info)}
+PURCHASE PRICE: {f"${input.purchase_price:,}" if input.purchase_price else "Unknown"}
+ANNUAL FEE: {f"${input.annual_fee:,}" if input.annual_fee else "Unknown"}
+
+Return JSON:
+{{
+    "overall_risk": "high" | "medium" | "low",
+    "risk_score": 0-100 (timeshares are usually 60+),
+    "resort_name": "Name if found",
+    "ownership_type": "deeded" | "right_to_use" | "points" | "unknown",
+    "has_perpetuity_clause": true/false,
+    "rescission_deadline": "X days" or null,
+    "estimated_10yr_cost": "$XX,XXX" with fee increases,
+    "red_flags": [{{
+        "name": "Issue",
+        "severity": "critical" | "warning" | "info",
+        "clause_text": "Actual text",
+        "explanation": "Plain language, direct impact",
+        "protection": "What to do"
+    }}],
+    "exit_options": ["Ranked list of exit options"],
+    "summary": "2-3 sentences - be direct about the risks",
+    "rescission_letter": "Template letter to cancel if within rescission period"
+}}
+
+Be blunt. 85% of timeshare buyers regret their purchase.
+Return ONLY valid JSON."""
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        result = json.loads(response_text.strip())
+        return TimeshareContractReport(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Timeshare contract analysis failed: {str(e)}")
+
+
+# ============== INSURANCE POLICY ANALYSIS ==============
+
+class InsurancePolicyRedFlag(BaseModel):
+    name: str
+    severity: str
+    clause_text: Optional[str]
+    explanation: str
+    what_to_ask: str
+
+class InsurancePolicyInput(BaseModel):
+    policy_text: str
+    policy_type: Optional[str] = None  # "auto", "home", "renters", "health"
+    state: Optional[str] = None
+
+class InsurancePolicyReport(BaseModel):
+    overall_risk: str
+    risk_score: int
+    policy_type: str
+    carrier: Optional[str]
+    coverage_type: str  # "named_perils", "open_perils", "unknown"
+    valuation_method: str  # "actual_cash_value", "replacement_cost", "unknown"
+    deductible_type: str  # "flat", "percentage", "unknown"
+    has_arbitration: bool
+    red_flags: list[InsurancePolicyRedFlag]
+    coverage_gaps: list[str]
+    summary: str
+    questions_for_agent: str
+
+
+def mock_insurance_policy_analysis(policy_text: str, policy_type: str = None, state: str = None) -> dict:
+    """Generate mock insurance policy analysis"""
+    text_lower = policy_text.lower()
+
+    red_flags = []
+    risk_score = 30
+    coverage_gaps = []
+
+    # Determine policy type
+    if not policy_type:
+        if 'auto' in text_lower or 'vehicle' in text_lower:
+            policy_type = "auto"
+        elif 'homeowner' in text_lower or 'dwelling' in text_lower:
+            policy_type = "home"
+        elif 'renter' in text_lower or 'tenant' in text_lower:
+            policy_type = "renters"
+        elif 'health' in text_lower or 'medical' in text_lower:
+            policy_type = "health"
+        else:
+            policy_type = "unknown"
+
+    # Check valuation method
+    valuation_method = "unknown"
+    if 'actual cash value' in text_lower:
+        valuation_method = "actual_cash_value"
+        red_flags.append({
+            "name": "Actual Cash Value Coverage",
+            "severity": "warning",
+            "clause_text": "We will pay the actual cash value of the damaged property...",
+            "explanation": "They deduct depreciation. A 10-year-old roof worth $10K to replace might only pay out $5K.",
+            "what_to_ask": "Ask about upgrading to Replacement Cost coverage. It costs more but pays full replacement value."
+        })
+        risk_score += 15
+    elif 'replacement cost' in text_lower:
+        valuation_method = "replacement_cost"
+
+    # Check for ACC clause
+    if 'concurrent' in text_lower and 'sequence' in text_lower:
+        red_flags.append({
+            "name": "Anti-Concurrent Causation Clause",
+            "severity": "critical",
+            "clause_text": "...whether or not any other cause or event contributes concurrently or in any sequence...",
+            "explanation": "If wind (covered) and flood (excluded) both cause damage, your ENTIRE claim can be denied.",
+            "what_to_ask": "This is standard but dangerous. Ask about flood insurance if you're in a flood-prone area."
+        })
+        risk_score += 20
+        if state and state.upper() in ['CA', 'ND', 'WA', 'WV']:
+            red_flags[-1]["explanation"] += f" Good news: {state.upper()} may not enforce ACC clauses."
+
+    # Check deductible type
+    deductible_type = "unknown"
+    if '%' in text_lower and ('hurricane' in text_lower or 'wind' in text_lower or 'hail' in text_lower):
+        deductible_type = "percentage"
+        red_flags.append({
+            "name": "Percentage Deductible",
+            "severity": "critical",
+            "clause_text": "Hurricane deductible: 5% of Coverage A...",
+            "explanation": "5% deductible on a $300K home = $15,000 out of pocket before insurance pays anything.",
+            "what_to_ask": "Ask about switching to a flat deductible if available. Calculate worst-case out-of-pocket."
+        })
+        risk_score += 20
+    else:
+        deductible_type = "flat"
+
+    # Check coverage type
+    coverage_type = "unknown"
+    if 'open perils' in text_lower or 'all risk' in text_lower:
+        coverage_type = "open_perils"
+    elif 'named perils' in text_lower or 'specified perils' in text_lower:
+        coverage_type = "named_perils"
+        red_flags.append({
+            "name": "Named Perils Coverage",
+            "severity": "warning",
+            "clause_text": "We insure against direct physical loss caused by the following perils...",
+            "explanation": "Only listed events are covered. If something happens that's not on the list, you're not covered.",
+            "what_to_ask": "Ask about upgrading to Open Perils/All Risk coverage."
+        })
+        risk_score += 10
+
+    # Check for arbitration
+    has_arbitration = 'arbitration' in text_lower
+    if has_arbitration:
+        red_flags.append({
+            "name": "Mandatory Arbitration",
+            "severity": "warning",
+            "clause_text": "Any disputes shall be resolved through binding arbitration...",
+            "explanation": "You can't sue in court if they deny your claim. Arbitration often favors insurers.",
+            "what_to_ask": "Check if you can opt out. Note this for if you ever have a claim dispute."
+        })
+        risk_score += 10
+
+    # Check for common exclusions
+    exclusion_checks = [
+        ("flood", "Flood Damage", "home"),
+        ("earthquake", "Earthquake Damage", "home"),
+        ("mold", "Mold Damage", "home"),
+        ("sewer backup", "Sewer Backup", "home"),
+        ("ordinance", "Building Code Upgrades", "home"),
+        ("business use", "Business Use of Vehicle", "auto"),
+        ("rideshare", "Rideshare/Delivery", "auto"),
+    ]
+
+    for keyword, name, applies_to in exclusion_checks:
+        if (policy_type == applies_to or applies_to == "all") and keyword in text_lower and 'exclud' in text_lower:
+            coverage_gaps.append(f"{name} excluded - may need separate coverage")
+
+    # Generate summary
+    critical_count = len([r for r in red_flags if r['severity'] == 'critical'])
+    if critical_count > 0:
+        summary = f"This policy has {critical_count} critical issue(s) that could result in claim denials. "
+    else:
+        summary = "This policy has standard terms, but understand your coverage limits. "
+
+    if coverage_gaps:
+        summary += f"There are {len(coverage_gaps)} potential coverage gaps to address."
+
+    # Generate questions
+    questions = """QUESTIONS TO ASK YOUR INSURANCE AGENT:
+
+1. VALUATION
+   - "Is this Actual Cash Value or Replacement Cost?"
+   - "Can I upgrade to Replacement Cost?"
+
+2. DEDUCTIBLES
+   - "What's my deductible for [hurricane/wind/hail]?"
+   - "Is it a flat amount or percentage?"
+   - "What's my maximum out-of-pocket for a claim?"
+
+3. EXCLUSIONS
+   - "What's NOT covered by this policy?"
+   - "Do I need separate flood/earthquake coverage?"
+   - "Is sewer backup covered?"
+
+4. CLAIM PROCESS
+   - "What's the claim filing deadline?"
+   - "What documentation do I need after a loss?"
+   - "Is there mandatory arbitration?"
+
+5. DISCOUNTS
+   - "Are there discounts I'm not getting?"
+   - "Would bundling save me money?"
+
+AFTER A LOSS:
+- Document everything with photos/video
+- Don't throw anything away until adjuster sees it
+- Get multiple repair estimates
+- Know that first offer is often negotiable
+"""
+
+    return {
+        "overall_risk": "high" if risk_score >= 50 else "medium" if risk_score >= 30 else "low",
+        "risk_score": min(100, risk_score),
+        "policy_type": policy_type,
+        "carrier": None,
+        "coverage_type": coverage_type,
+        "valuation_method": valuation_method,
+        "deductible_type": deductible_type,
+        "has_arbitration": has_arbitration,
+        "red_flags": red_flags,
+        "coverage_gaps": coverage_gaps,
+        "summary": summary,
+        "questions_for_agent": questions
+    }
+
+
+@app.post("/api/analyze-insurance-policy", response_model=InsurancePolicyReport)
+async def analyze_insurance_policy(input: InsurancePolicyInput):
+    """Analyze a consumer insurance policy"""
+    try:
+        if MOCK_MODE:
+            result = mock_insurance_policy_analysis(input.policy_text, input.policy_type, input.state)
+            return InsurancePolicyReport(**result)
+
+        client = get_client()
+
+        prompt = f"""You are an insurance expert helping a consumer understand their policy.
+
+POLICY TEXT:
+{input.policy_text[:15000]}
+
+POLICY TYPE: {input.policy_type or "Determine from text"}
+STATE: {input.state or "Not specified"}
+
+Return JSON:
+{{
+    "overall_risk": "high" | "medium" | "low",
+    "risk_score": 0-100,
+    "policy_type": "auto" | "home" | "renters" | "health" | "unknown",
+    "carrier": "Name if found",
+    "coverage_type": "named_perils" | "open_perils" | "unknown",
+    "valuation_method": "actual_cash_value" | "replacement_cost" | "unknown",
+    "deductible_type": "flat" | "percentage" | "unknown",
+    "has_arbitration": true/false,
+    "red_flags": [{{
+        "name": "Issue",
+        "severity": "critical" | "warning" | "info",
+        "clause_text": "Actual policy text",
+        "explanation": "What this means in plain language",
+        "what_to_ask": "Question to ask your agent"
+    }}],
+    "coverage_gaps": ["List of potential gaps"],
+    "summary": "2-3 sentences",
+    "questions_for_agent": "Questions to ask your insurance agent"
+}}
+
+Focus on exclusions, deductibles, and valuation method.
+Return ONLY valid JSON."""
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_completion_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        response_text = response.choices[0].message.content
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        result = json.loads(response_text.strip())
+        return InsurancePolicyReport(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Insurance policy analysis failed: {str(e)}")
 
 
 if __name__ == "__main__":

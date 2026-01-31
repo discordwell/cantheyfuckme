@@ -1141,3 +1141,104 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* CONFIDENCE BANNER */
+.confidence-banner {
+  background: var(--pixel-bg-dark);
+  border: 3px solid var(--pixel-border);
+  padding: 15px;
+  margin-bottom: 20px;
+  box-shadow: 4px 4px 0 var(--pixel-shadow);
+}
+
+.confidence-banner.needs-review {
+  border-left: 6px solid var(--pixel-yellow);
+  background: rgba(255, 217, 61, 0.1);
+}
+
+.confidence-banner.confident {
+  border-left: 6px solid var(--pixel-green);
+  background: rgba(123, 201, 111, 0.1);
+}
+
+.confidence-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Press Start 2P', cursive;
+  font-size: 10px;
+}
+
+.confidence-icon {
+  font-size: 16px;
+}
+
+.confidence-label {
+  color: var(--pixel-gray);
+}
+
+.confidence-value {
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 2px solid currentColor;
+}
+
+.confidence-value.high {
+  color: var(--pixel-green);
+}
+
+.confidence-value.medium {
+  color: var(--pixel-yellow);
+}
+
+.confidence-value.low {
+  color: var(--pixel-red);
+}
+
+.review-warning {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 2px dashed var(--pixel-yellow);
+}
+
+.warning-text {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 9px;
+  color: var(--pixel-yellow);
+  display: block;
+  margin-bottom: 8px;
+}
+
+.review-reasons {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  color: var(--pixel-text);
+}
+
+.review-reasons li {
+  margin-bottom: 4px;
+}
+
+.low-confidence-fields {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.low-confidence-fields .label {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 8px;
+  color: var(--pixel-red);
+}
+
+.field-badge {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: rgba(255, 107, 107, 0.2);
+  border: 1px solid var(--pixel-red);
+  color: var(--pixel-red);
+  text-transform: uppercase;
+}
