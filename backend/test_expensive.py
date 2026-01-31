@@ -2,20 +2,27 @@
 Expensive Integration Tests for Insurance LLM
 
 These tests use:
-1. Real LLM API calls (requires OPENAI_API_KEY)
+1. Real LLM API calls (requires OPENAI_API_KEY on backend)
 2. Browser automation (requires Chrome + extension)
 
 RUN SPARINGLY - each test costs money and time.
 
+By default, tests run against PRODUCTION:
+  - Frontend: https://cantheyfuckme.com
+  - Backend: https://insurance-llm-production.up.railway.app
+
 Usage:
-    # Run real LLM tests only (no browser):
+    # Run real LLM tests against production:
     python test_expensive.py --llm
 
-    # Run browser workflow test only:
+    # Run browser workflow test against production:
     python test_expensive.py --browser
 
     # Run all expensive tests:
     python test_expensive.py --all
+
+    # Run against localhost instead:
+    LOCAL=1 python test_expensive.py --llm
 """
 
 import requests
@@ -24,7 +31,10 @@ import sys
 import os
 import time
 
-BASE_URL = "http://localhost:8081"
+# Default to production; use LOCAL=1 to test against localhost
+BASE_URL = os.environ.get("API_URL", "https://insurance-llm-production.up.railway.app")
+if os.environ.get("LOCAL"):
+    BASE_URL = "http://localhost:8081"
 
 # Sample documents for testing
 GYM_CONTRACT = """PLANET FITNESS MEMBERSHIP AGREEMENT
@@ -159,19 +169,21 @@ def test_real_llm_influencer():
     return True
 
 
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://cantheyfuckme.com")
+if os.environ.get("LOCAL"):
+    FRONTEND_URL = "http://localhost:5173"
+
+
 def test_browser_workflow():
     """Test full browser workflow using Claude in Chrome MCP"""
     print("\n[BROWSER] Testing Full Workflow...")
-    print("  This test requires:")
-    print("  1. Chrome with Claude in Chrome extension")
-    print("  2. MCP server running")
-    print("  3. Frontend running on localhost:5173")
+    print(f"  Frontend: {FRONTEND_URL}")
+    print(f"  Backend: {BASE_URL}")
     print()
 
-    # This would use the MCP browser automation tools
-    # For now, we just verify the frontend is accessible
+    # Verify frontend is accessible
     try:
-        resp = requests.get("http://localhost:5173", timeout=10)
+        resp = requests.get(FRONTEND_URL, timeout=10)
         if resp.status_code == 200:
             print("  ✓ Frontend is accessible")
         else:
@@ -179,12 +191,23 @@ def test_browser_workflow():
             return False
     except Exception as e:
         print(f"  ✗ Frontend not accessible: {e}")
-        print("  Start frontend with: cd frontend && npm run dev")
+        return False
+
+    # Verify backend is accessible
+    try:
+        resp = requests.get(BASE_URL, timeout=10)
+        if resp.status_code == 200:
+            print("  ✓ Backend is accessible")
+        else:
+            print(f"  ✗ Backend returned {resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"  ✗ Backend not accessible: {e}")
         return False
 
     print()
     print("  Browser workflow test steps (manual for now):")
-    print("  1. Navigate to http://localhost:5173")
+    print(f"  1. Navigate to {FRONTEND_URL}")
     print("  2. Paste a gym contract")
     print("  3. Click 'CAN THEY FUCK ME?'")
     print("  4. Type 'not legal advice' in disclaimer")
