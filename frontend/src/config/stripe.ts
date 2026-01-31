@@ -10,7 +10,7 @@
 //
 // Example: https://buy.stripe.com/abc123xyz
 
-export const STRIPE_DONATION_LINK = 'https://donate.stripe.com/YOUR_LINK_HERE'
+export const STRIPE_DONATION_LINK = 'https://buy.stripe.com/cNi3cu3Kacjf2jYfbqes000'
 
 // Set to true once you've configured your Stripe link
-export const DONATION_ENABLED = false
+export const DONATION_ENABLED = true
