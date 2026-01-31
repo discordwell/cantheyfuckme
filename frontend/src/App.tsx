@@ -3,6 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import './App.css'
 import { getOffersForDocType } from './config/affiliates'
 import type { AffiliateOffer } from './config/affiliates'
+import { STRIPE_DONATION_LINK, DONATION_ENABLED } from './config/stripe'
 
 // API base URL - uses environment variable in production, localhost in dev
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8081'
@@ -2672,14 +2673,26 @@ function App() {
 
       <footer className="footer">
         <p>* Created by Robert Cordwell *</p>
-        <a
-          href="https://donate.stripe.com/YOUR_STRIPE_DONATION_LINK"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="donate-link"
-        >
-          [BUY ME A COFFEE]
-        </a>
+        <div className="footer-links">
+          {DONATION_ENABLED && (
+            <a
+              href={STRIPE_DONATION_LINK}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="donate-link"
+            >
+              [BUY ME A COFFEE]
+            </a>
+          )}
+          <a
+            href="https://github.com/discordwell/insurance-llm"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="github-link"
+          >
+            [GITHUB]
+          </a>
+        </div>
       </footer>
     </div>
   )
