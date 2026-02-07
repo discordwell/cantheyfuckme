@@ -112,7 +112,7 @@ body {
   top: 20px;
   right: 20px;
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   background: var(--pixel-bg);
   border: 3px solid var(--pixel-border);
   padding: 8px 12px;
@@ -174,7 +174,7 @@ body {
 
 .sample-docs .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 /* DROPZONE */
@@ -295,7 +295,7 @@ body {
 }
 
 .pixel-btn.small {
-  font-size: 9px;
+  font-size: 11px;
   padding: 8px 12px;
   margin: 0;
   box-shadow: 2px 2px 0 var(--pixel-shadow);
@@ -326,7 +326,7 @@ body {
 .tab {
   flex: 1;
   font-family: 'Press Start 2P', cursive;
-  font-size: 11px;
+  font-size: 12px;
   padding: 15px;
   border: none;
   background: var(--pixel-bg-dark);
@@ -381,7 +381,7 @@ body {
 
 .data-card h3 {
   font-family: 'Press Start 2P', cursive;
-  font-size: 11px;
+  font-size: 12px;
   margin: 0 0 15px 0;
   padding-bottom: 10px;
   border-bottom: 2px solid var(--pixel-border);
@@ -400,7 +400,7 @@ body {
 
 .data-row .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--pixel-gray);
 }
 
@@ -439,14 +439,14 @@ body {
   left: 50%;
   transform: translate(-50%, -50%);
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   text-shadow: 1px 1px 0 white;
 }
 
 .risk-label {
   text-align: center;
   font-family: 'Press Start 2P', cursive;
-  font-size: 9px;
+  font-size: 11px;
   margin: 0;
 }
 
@@ -459,7 +459,7 @@ body {
 
 .pixel-table th {
   font-family: 'Press Start 2P', cursive;
-  font-size: 9px;
+  font-size: 11px;
   text-align: left;
   padding: 10px;
   background: var(--pixel-bg-dark);
@@ -496,7 +496,7 @@ body {
 .pixel-list li::before {
   content: '> ';
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .pixel-list li:last-child {
@@ -555,12 +555,12 @@ body {
 .footer p {
   margin: 5px 0;
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .footer .credits {
   color: var(--pixel-gray);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 /* MODE TOGGLE */
@@ -581,7 +581,7 @@ body {
 
 .mode-btn {
   font-family: 'Press Start 2P', cursive;
-  font-size: 9px;
+  font-size: 11px;
   padding: 8px 12px;
   border: none;
   background: var(--pixel-bg-dark);
@@ -613,7 +613,7 @@ body {
 
 .compliance-intro .warning-text {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   color: #856404;
   margin: 0 0 10px 0;
 }
@@ -636,7 +636,7 @@ body {
 
 .project-type-selector .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .pixel-select {
@@ -669,7 +669,7 @@ body {
 
 .state-selector .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .state-selector .pixel-select {
@@ -689,7 +689,7 @@ body {
 
 .state-note .note-header {
   font-family: 'Press Start 2P', cursive;
-  font-size: 9px;
+  font-size: 11px;
   display: block;
   margin-bottom: 5px;
 }
@@ -710,13 +710,13 @@ body {
 
 .state-note .mitigation-header {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--pixel-gray);
   margin-bottom: 4px;
 }
 
 .state-note .mitigation-item {
-  font-size: 14px;
+  font-size: 16px;
   color: var(--pixel-text);
   padding-left: 8px;
 }
@@ -753,13 +753,13 @@ body {
 
 .risk-exposure .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--pixel-gray);
 }
 
 .risk-exposure .value {
   font-family: 'Press Start 2P', cursive;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--pixel-red);
 }
 
@@ -836,7 +836,7 @@ body {
 
 .item-name {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   flex: 1;
 }
 
@@ -863,7 +863,7 @@ body {
 
 .detail-row .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 7px;
+  font-size: 9px;
   color: var(--pixel-gray);
 }
 
@@ -873,7 +873,7 @@ body {
 }
 
 .item-explanation {
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.5;
   margin: 0;
   color: var(--pixel-text);
@@ -1100,7 +1100,7 @@ body {
 /* DOC TYPE BADGE */
 .doc-type-badge {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   padding: 4px 8px;
   color: var(--pixel-text);
   margin-left: 10px;
@@ -1126,7 +1126,7 @@ body {
 
 .clause-text .label {
   display: block;
-  font-size: 12px;
+  font-size: 14px;
   font-style: normal;
   margin-bottom: 5px;
   color: var(--pixel-gray);
@@ -1145,7 +1145,7 @@ body {
 
 .protection-box .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--pixel-green);
   margin-right: 10px;
 }
@@ -1229,7 +1229,7 @@ body {
   align-items: center;
   gap: 10px;
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .confidence-icon {
@@ -1266,7 +1266,7 @@ body {
 
 .warning-text {
   font-family: 'Press Start 2P', cursive;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--pixel-yellow);
   display: block;
   margin-bottom: 8px;
@@ -1275,7 +1275,7 @@ body {
 .review-reasons {
   margin: 0;
   padding-left: 20px;
-  font-size: 14px;
+  font-size: 16px;
   color: var(--pixel-text);
 }
 
@@ -1293,7 +1293,7 @@ body {
 
 .low-confidence-fields .label {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--pixel-red);
 }
 
@@ -1335,7 +1335,7 @@ body {
 
 .credits-badge {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   padding: 4px 8px;
   background: var(--pixel-green);
   color: #fff;
@@ -1344,7 +1344,7 @@ body {
 
 .auth-btn {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   padding: 8px 12px;
   border: 2px solid var(--pixel-border);
   cursor: pointer;
@@ -1443,7 +1443,7 @@ body {
   top: -12px;
   left: 16px;
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   padding: 4px 8px;
   background: var(--pixel-yellow);
   color: #000;
@@ -1473,7 +1473,7 @@ body {
 .affiliate-cta {
   display: inline-block;
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   padding: 12px 20px;
   background: var(--pixel-accent-2);
   color: #fff;
@@ -1503,7 +1503,7 @@ body {
 
 .auth-error {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   color: var(--pixel-red);
   background: rgba(255, 107, 107, 0.1);
   border: 2px solid var(--pixel-red);
@@ -1634,13 +1634,13 @@ body {
 
 .summary-title {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--pixel-text);
 }
 
 .summary-badge {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   padding: 4px 8px;
   background: var(--pixel-gray);
   color: #fff;
@@ -1671,7 +1671,7 @@ body {
 
 .more-issues-teaser {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--pixel-yellow);
   text-align: center;
   padding: 16px;
@@ -1734,13 +1734,13 @@ body {
 
 .history-type {
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--pixel-text);
 }
 
 .history-risk {
   font-family: 'Press Start 2P', cursive;
-  font-size: 8px;
+  font-size: 10px;
   padding: 4px 8px;
 }
 
@@ -1777,7 +1777,7 @@ body {
 .donate-link {
   display: inline-block;
   font-family: 'Press Start 2P', cursive;
-  font-size: 10px;
+  font-size: 11px;
   padding: 12px 20px;
   background: var(--pixel-yellow);
   color: #000;
