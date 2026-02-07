@@ -24,7 +24,7 @@ export default function Header({ isLoggedIn, userEmail, openHistoryModal, handle
             </>
           ) : (
             <button className="auth-btn signup-btn" onClick={() => { setAuthMode('signup'); setShowAuthModal(true) }}>
-              Sign In to Save History
+              Sign-In
             </button>
           )}
         </div>
