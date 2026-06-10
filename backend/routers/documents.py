@@ -2,8 +2,8 @@ import json
 import base64
 
 from fastapi import APIRouter, HTTPException
-from config import MOCK_MODE, OPENAI_MODEL
-from services.llm import get_client, clean_llm_response
+from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL
+from services.llm import get_client, llm_json_call, llm_text_call
 from services.mock.extract import mock_extract
 from schemas.common import DocumentInput, ExtractedPolicy, OCRInput, ClassifyInput, ClassifyResult
 from data.supported_doc_types import SUPPORTED_DOC_TYPES
@@ -22,31 +22,11 @@ async def extract_document(doc: DocumentInput):
             extracted = mock_extract(doc.text)
             return ExtractedPolicy(**extracted)
 
-        prompt = EXTRACTION_PROMPT.replace("<<DOCUMENT>>", doc.text)
-        response = get_client().chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-
-        response_text = response.choices[0].message.content
-        # Clean up potential markdown formatting
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-
-        extracted = json.loads(response_text)
+        extracted = llm_json_call(EXTRACTION_PROMPT.replace("<<DOCUMENT>>", doc.text))
         return ExtractedPolicy(**extracted)
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse LLM response: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -79,20 +59,10 @@ Provide a JSON response with:
 Return ONLY valid JSON."""
 
     try:
-        response = get_client().chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": comparison_prompt}]
-        )
+        return llm_json_call(comparison_prompt)
 
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        return json.loads(response_text.strip())
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -152,8 +122,10 @@ Format as markdown with clear sections. Keep it concise but comprehensive."""
             messages=[{"role": "user", "content": proposal_prompt}]
         )
 
-        return {"proposal": response.choices[0].message.content}
+        return {"proposal": response.choices[0].message.content or ""}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -195,7 +167,7 @@ async def ocr_document(input: OCRInput):
 
                 # Call Vision API for this page
                 response = client.chat.completions.create(
-                    model="gpt-5.2",
+                    model=OPENAI_MODEL,
                     max_completion_tokens=4096,
                     messages=[
                         {
@@ -216,7 +188,7 @@ async def ocr_document(input: OCRInput):
                     ]
                 )
 
-                page_text = response.choices[0].message.content
+                page_text = response.choices[0].message.content or ""
                 if len(pdf_doc) > 1:
                     all_text.append(f"--- Page {page_num + 1} ---\n{page_text}")
                 else:
@@ -231,7 +203,7 @@ async def ocr_document(input: OCRInput):
             data_url = f"data:{media_type};base64,{input.file_data}"
 
             response = client.chat.completions.create(
-                model="gpt-5.2",
+                model=OPENAI_MODEL,
                 max_completion_tokens=4096,
                 messages=[
                     {
@@ -252,11 +224,13 @@ async def ocr_document(input: OCRInput):
                 ]
             )
 
-            return {"text": response.choices[0].message.content}
+            return {"text": response.choices[0].message.content or ""}
 
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {input.file_type}")
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR failed: {str(e)}")
 
@@ -307,28 +281,15 @@ async def classify_document(input: ClassifyInput):
                 supported=doc_info["supported"]
             )
 
-        client = get_client()
-
         # Use cheap model for classification - just need first ~2000 chars
         sample_text = input.text[:2000]
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Cheap and fast
-            max_completion_tokens=150,
-            messages=[
-                {"role": "system", "content": CLASSIFY_PROMPT},
-                {"role": "user", "content": f"Classify this document:\n\n{sample_text}"}
-            ]
+        response_text = llm_text_call(
+            f"Classify this document:\n\n{sample_text}",
+            model=CLASSIFY_MODEL,
+            max_tokens=150,
+            system=CLASSIFY_PROMPT,
         )
-
-        response_text = response.choices[0].message.content.strip()
-
-        # Parse JSON response
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
 
         result = json.loads(response_text)
         doc_type = result.get("type", "unknown")
@@ -353,5 +314,7 @@ async def classify_document(input: ClassifyInput):
             description="Could not classify document",
             supported=False
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Classification failed: {str(e)}")

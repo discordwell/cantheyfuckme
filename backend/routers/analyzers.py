@@ -1,9 +1,9 @@
 import json
 
 from fastapi import APIRouter, HTTPException, Request
-from config import MOCK_MODE, OPENAI_MODEL
-from services.llm import get_client, clean_llm_response, parse_limit_to_number, calculate_extraction_confidence
-from services.auth import get_current_user, hash_document, check_premium_access, use_credit
+from config import MOCK_MODE
+from services.llm import llm_json_call, calculate_extraction_confidence
+from services.analysis import get_doc_context, finalize_report, run_analysis
 from services.db_ops import save_upload
 from services.mock.coi import mock_coi_extract, mock_compliance_check
 from services.mock.lease import mock_lease_analysis
@@ -54,12 +54,13 @@ from data.states import (
     STATE_GYM_PROTECTIONS,
     NON_COMPETE_STATES,
     TIMESHARE_RESCISSION,
-    STATE_DOC_FEE_CAPS,
-    STATE_DEBT_SOL,
 )
 from data.red_flags import LEASE_RED_FLAGS, GYM_RED_FLAGS, EMPLOYMENT_RED_FLAGS
 
 router = APIRouter(prefix="/api", tags=["analyzers"])
+
+# Documents are truncated to this length before being sent to the LLM
+MAX_DOC_CHARS = 15000
 
 
 # ============== COI COMPLIANCE CHECK ==============
@@ -68,12 +69,7 @@ router = APIRouter(prefix="/api", tags=["analyzers"])
 async def check_coi_compliance(input: COIComplianceInput, request: Request):
     """Check a Certificate of Insurance against contract requirements"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.coi_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
+        doc_hash, user, is_premium = get_doc_context(request, input.coi_text)
 
         # Get requirements from preset or custom
         if input.project_type and input.project_type in PROJECT_TYPE_REQUIREMENTS:
@@ -86,73 +82,36 @@ async def check_coi_compliance(input: COIComplianceInput, request: Request):
 
         project_type_name = requirements.get('name', 'Commercial Construction')
 
-        # Use mock mode or real API
         if MOCK_MODE:
             coi_data = mock_coi_extract(input.coi_text)
             result = mock_compliance_check(coi_data, requirements, input.state)
-            # Save upload
-            save_upload("coi", input.coi_text, input.state, result, user_id=user.id if user else None)
-            report = ComplianceReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("critical_gaps", [])) + len(result.get("warnings", []))
-            return report
+        else:
+            # Step 1: Extract COI data
+            coi_data = llm_json_call(COI_EXTRACTION_PROMPT.replace("<<DOCUMENT>>", input.coi_text))
 
-        # Step 1: Extract COI data
-        extract_prompt = COI_EXTRACTION_PROMPT.replace("<<DOCUMENT>>", input.coi_text)
-        response = get_client().chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": extract_prompt}]
-        )
+            # Step 2: Check compliance
+            compliance_prompt = (
+                COI_COMPLIANCE_PROMPT
+                .replace("<<COI_DATA>>", json.dumps(coi_data, indent=2))
+                .replace("<<REQUIREMENTS>>", json.dumps(requirements, indent=2))
+                .replace("<<PROJECT_TYPE>>", project_type_name)
+            )
+            result = llm_json_call(compliance_prompt)
+            result['coi_data'] = coi_data
+            result['extraction_metadata'] = calculate_extraction_confidence(coi_data)
 
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-
-        coi_data = json.loads(response_text)
-
-        # Step 2: Check compliance
-        compliance_prompt = COI_COMPLIANCE_PROMPT.replace("<<COI_DATA>>", json.dumps(coi_data, indent=2))
-        compliance_prompt = compliance_prompt.replace("<<REQUIREMENTS>>", json.dumps(requirements, indent=2))
-        compliance_prompt = compliance_prompt.replace("<<PROJECT_TYPE>>", project_type_name)
-
-        response = get_client().chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": compliance_prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-
-        result = json.loads(response_text)
-        result['coi_data'] = coi_data
-
-        # Calculate extraction confidence metadata
-        extraction_metadata = calculate_extraction_confidence(coi_data)
-        result['extraction_metadata'] = extraction_metadata
-
-        # Save upload
         save_upload("coi", input.coi_text, input.state, result, user_id=user.id if user else None)
 
-        report = ComplianceReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("critical_gaps", [])) + len(result.get("warnings", []))
-        return report
+        return finalize_report(
+            ComplianceReport, result,
+            doc_hash=doc_hash, is_premium=is_premium,
+            issue_keys=("critical_gaps", "warnings"),
+        )
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"COI compliance check failed: {str(e)}")
 
 
 # ============== LEASE ANALYSIS ==============
@@ -161,75 +120,39 @@ async def check_coi_compliance(input: COIComplianceInput, request: Request):
 async def analyze_lease(input: LeaseAnalysisInput, request: Request):
     """Analyze a lease for insurance-related red flags and risks"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.lease_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
+        doc_hash, user, is_premium = get_doc_context(request, input.lease_text)
 
-        # Mock mode
         if MOCK_MODE:
             result = mock_lease_analysis(input.lease_text, input.state)
             save_upload("lease", input.lease_text, input.state, result, user_id=user.id if user else None)
-            report = LeaseAnalysisReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-            return report
-
-        client = get_client()
+            return finalize_report(
+                LeaseAnalysisReport, result,
+                doc_hash=doc_hash, is_premium=is_premium,
+                issue_keys=("red_flags", "missing_protections"),
+            )
 
         # Step 1: Extract lease data
-        extract_prompt = LEASE_EXTRACTION_PROMPT.replace("<<DOCUMENT>>", input.lease_text[:15000])  # Limit length
-
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": extract_prompt}]
+        lease_data = llm_json_call(
+            LEASE_EXTRACTION_PROMPT.replace("<<DOCUMENT>>", input.lease_text[:MAX_DOC_CHARS])
         )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-
-        lease_data = json.loads(response_text)
 
         # Step 2: Analyze for red flags
-        analysis_prompt = LEASE_ANALYSIS_PROMPT.replace("<<LEASE_DATA>>", json.dumps(lease_data, indent=2))
-        analysis_prompt = analysis_prompt.replace("<<RED_FLAGS>>", json.dumps(LEASE_RED_FLAGS, indent=2))
-        analysis_prompt = analysis_prompt.replace("<<STATE>>", input.state or "Not specified")
-
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": analysis_prompt}]
+        analysis_prompt = (
+            LEASE_ANALYSIS_PROMPT
+            .replace("<<LEASE_DATA>>", json.dumps(lease_data, indent=2))
+            .replace("<<RED_FLAGS>>", json.dumps(LEASE_RED_FLAGS, indent=2))
+            .replace("<<STATE>>", input.state or "Not specified")
         )
+        analysis = llm_json_call(analysis_prompt)
 
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-
-        analysis = json.loads(response_text)
-
-        # Merge extraction and analysis
-        result = {
+        save_upload("lease", input.lease_text, input.state, {
             "overall_risk": analysis.get("overall_risk", "medium"),
             "risk_score": analysis.get("risk_score", 50),
-            "red_flags": analysis.get("red_flags", [])
-        }
-        save_upload("lease", input.lease_text, input.state, result, user_id=user.id if user else None)
+            "red_flags": analysis.get("red_flags", []),
+        }, user_id=user.id if user else None)
 
-        # Calculate total issues for teaser
         red_flags = analysis.get("red_flags", [])
         missing_protections = analysis.get("missing_protections", [])
-        total_issues = len(red_flags) + len(missing_protections)
 
         return LeaseAnalysisReport(
             overall_risk=analysis.get("overall_risk", "medium"),
@@ -246,11 +169,11 @@ async def analyze_lease(input: LeaseAnalysisInput, request: Request):
             negotiation_letter=analysis.get("negotiation_letter", ""),
             document_hash=doc_hash,
             is_premium=is_premium,
-            total_issues=total_issues
+            total_issues=len(red_flags) + len(missing_protections)
         )
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lease analysis failed: {str(e)}")
 
@@ -261,53 +184,29 @@ async def analyze_lease(input: LeaseAnalysisInput, request: Request):
 async def analyze_gym_contract(input: GymContractInput, request: Request):
     """Analyze a gym membership contract for red flags"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
+        def build_prompt():
+            state_laws = STATE_GYM_PROTECTIONS.get(input.state.upper() if input.state else "", {})
+            return (
+                GYM_ANALYSIS_PROMPT
+                .replace("<<CONTRACT>>", input.contract_text[:MAX_DOC_CHARS])
+                .replace("<<STATE>>", input.state or "Not specified")
+                .replace("<<STATE_LAWS>>", json.dumps(state_laws, indent=2))
+                .replace("<<RED_FLAGS>>", json.dumps(GYM_RED_FLAGS, indent=2))
+            )
 
-        if MOCK_MODE:
-            result = mock_gym_analysis(input.contract_text, input.state)
-            save_upload("gym", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = GymContractReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", []))
-            return report
-
-        client = get_client()
-
-        # Get state laws
-        state_laws = STATE_GYM_PROTECTIONS.get(input.state.upper() if input.state else "", {})
-
-        prompt = GYM_ANALYSIS_PROMPT.replace("<<CONTRACT>>", input.contract_text[:15000])
-        prompt = prompt.replace("<<STATE>>", input.state or "Not specified")
-        prompt = prompt.replace("<<STATE_LAWS>>", json.dumps(state_laws, indent=2))
-        prompt = prompt.replace("<<RED_FLAGS>>", json.dumps(GYM_RED_FLAGS, indent=2))
-
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="gym",
+            report_cls=GymContractReport,
+            issue_keys=("red_flags",),
+            state=input.state,
+            mock_fn=lambda: mock_gym_analysis(input.contract_text, input.state),
+            prompt_fn=build_prompt,
         )
 
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("gym", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = GymContractReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gym contract analysis failed: {str(e)}")
 
@@ -318,53 +217,30 @@ async def analyze_gym_contract(input: GymContractInput, request: Request):
 async def analyze_employment_contract(input: EmploymentContractInput, request: Request):
     """Analyze an employment contract for problematic terms"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
+        def build_prompt():
+            state_rules = NON_COMPETE_STATES.get(input.state.upper() if input.state else "", {})
+            return (
+                EMPLOYMENT_ANALYSIS_PROMPT
+                .replace("<<CONTRACT>>", input.contract_text[:MAX_DOC_CHARS])
+                .replace("<<STATE>>", input.state or "Not specified")
+                .replace("<<SALARY>>", f"${input.salary:,}" if input.salary else "Not specified")
+                .replace("<<STATE_RULES>>", json.dumps(state_rules, indent=2))
+                .replace("<<RED_FLAGS>>", json.dumps(EMPLOYMENT_RED_FLAGS, indent=2))
+            )
 
-        if MOCK_MODE:
-            result = mock_employment_analysis(input.contract_text, input.state, input.salary)
-            save_upload("employment", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = EmploymentContractReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", []))
-            return report
-
-        client = get_client()
-
-        state_rules = NON_COMPETE_STATES.get(input.state.upper() if input.state else "", {})
-
-        prompt = EMPLOYMENT_ANALYSIS_PROMPT.replace("<<CONTRACT>>", input.contract_text[:15000])
-        prompt = prompt.replace("<<STATE>>", input.state or "Not specified")
-        prompt = prompt.replace("<<SALARY>>", f"${input.salary:,}" if input.salary else "Not specified")
-        prompt = prompt.replace("<<STATE_RULES>>", json.dumps(state_rules, indent=2))
-        prompt = prompt.replace("<<RED_FLAGS>>", json.dumps(EMPLOYMENT_RED_FLAGS, indent=2))
-
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="employment",
+            report_cls=EmploymentContractReport,
+            issue_keys=("red_flags",),
+            state=input.state,
+            mock_fn=lambda: mock_employment_analysis(input.contract_text, input.state, input.salary),
+            prompt_fn=build_prompt,
         )
 
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("employment", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = EmploymentContractReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Employment contract analysis failed: {str(e)}")
 
@@ -375,50 +251,21 @@ async def analyze_employment_contract(input: EmploymentContractInput, request: R
 async def analyze_freelancer_contract(input: FreelancerContractInput, request: Request):
     """Analyze a freelancer/contractor agreement"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_freelancer_analysis(input.contract_text, input.project_value)
-            save_upload("freelancer", input.contract_text, None, result, user_id=user.id if user else None)
-            report = FreelancerContractReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-            return report
-
-        client = get_client()
-
-        prompt = FREELANCER_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            project_value=f"${input.project_value:,}" if input.project_value else "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="freelancer",
+            report_cls=FreelancerContractReport,
+            issue_keys=("red_flags", "missing_protections"),
+            mock_fn=lambda: mock_freelancer_analysis(input.contract_text, input.project_value),
+            prompt_fn=lambda: FREELANCER_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                project_value=f"${input.project_value:,}" if input.project_value else "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("freelancer", input.contract_text, None, result, user_id=user.id if user else None)
-
-        report = FreelancerContractReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Freelancer contract analysis failed: {str(e)}")
 
@@ -429,50 +276,21 @@ async def analyze_freelancer_contract(input: FreelancerContractInput, request: R
 async def analyze_influencer_contract(input: InfluencerContractInput, request: Request):
     """Analyze an influencer/sponsorship contract"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_influencer_analysis(input.contract_text, input.base_rate)
-            save_upload("influencer", input.contract_text, None, result, user_id=user.id if user else None)
-            report = InfluencerContractReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", []))
-            return report
-
-        client = get_client()
-
-        prompt = INFLUENCER_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            base_rate=f"${input.base_rate:,}" if input.base_rate else "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="influencer",
+            report_cls=InfluencerContractReport,
+            issue_keys=("red_flags",),
+            mock_fn=lambda: mock_influencer_analysis(input.contract_text, input.base_rate),
+            prompt_fn=lambda: INFLUENCER_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                base_rate=f"${input.base_rate:,}" if input.base_rate else "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("influencer", input.contract_text, None, result, user_id=user.id if user else None)
-
-        report = InfluencerContractReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Influencer contract analysis failed: {str(e)}")
 
@@ -483,60 +301,31 @@ async def analyze_influencer_contract(input: InfluencerContractInput, request: R
 async def analyze_timeshare_contract(input: TimeshareContractInput, request: Request):
     """Analyze a timeshare contract"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_timeshare_analysis(
-                input.contract_text,
-                input.state,
-                input.purchase_price,
-                input.annual_fee
+        def build_prompt():
+            rescission_info = TIMESHARE_RESCISSION.get(input.state.upper() if input.state else "", {})
+            return TIMESHARE_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                state=input.state or "Not specified",
+                rescission_info=json.dumps(rescission_info),
+                purchase_price=f"${input.purchase_price:,}" if input.purchase_price else "Unknown",
+                annual_fee=f"${input.annual_fee:,}" if input.annual_fee else "Unknown"
             )
-            save_upload("timeshare", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = TimeshareContractReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", []))
-            return report
 
-        client = get_client()
-
-        rescission_info = TIMESHARE_RESCISSION.get(input.state.upper() if input.state else "", {})
-
-        prompt = TIMESHARE_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            state=input.state or "Not specified",
-            rescission_info=json.dumps(rescission_info),
-            purchase_price=f"${input.purchase_price:,}" if input.purchase_price else "Unknown",
-            annual_fee=f"${input.annual_fee:,}" if input.annual_fee else "Unknown"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="timeshare",
+            report_cls=TimeshareContractReport,
+            issue_keys=("red_flags",),
+            state=input.state,
+            mock_fn=lambda: mock_timeshare_analysis(
+                input.contract_text, input.state, input.purchase_price, input.annual_fee
+            ),
+            prompt_fn=build_prompt,
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("timeshare", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = TimeshareContractReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Timeshare contract analysis failed: {str(e)}")
 
@@ -547,51 +336,23 @@ async def analyze_timeshare_contract(input: TimeshareContractInput, request: Req
 async def analyze_insurance_policy(input: InsurancePolicyInput, request: Request):
     """Analyze a consumer insurance policy"""
     try:
-        # Compute document hash and check premium access
-        doc_hash = hash_document(input.policy_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_insurance_policy_analysis(input.policy_text, input.policy_type, input.state)
-            save_upload("insurance_policy", input.policy_text, input.state, result, user_id=user.id if user else None)
-            report = InsurancePolicyReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("coverage_gaps", []))
-            return report
-
-        client = get_client()
-
-        prompt = INSURANCE_POLICY_ANALYSIS_PROMPT.format(
-            policy_text=input.policy_text[:15000],
-            policy_type=input.policy_type or "Determine from text",
-            state=input.state or "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.policy_text,
+            doc_type="insurance_policy",
+            report_cls=InsurancePolicyReport,
+            issue_keys=("red_flags", "coverage_gaps"),
+            state=input.state,
+            mock_fn=lambda: mock_insurance_policy_analysis(input.policy_text, input.policy_type, input.state),
+            prompt_fn=lambda: INSURANCE_POLICY_ANALYSIS_PROMPT.format(
+                policy_text=input.policy_text[:MAX_DOC_CHARS],
+                policy_type=input.policy_type or "Determine from text",
+                state=input.state or "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("insurance_policy", input.policy_text, input.state, result, user_id=user.id if user else None)
-
-        report = InsurancePolicyReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", [])) + len(result.get("coverage_gaps", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Insurance policy analysis failed: {str(e)}")
 
@@ -602,51 +363,26 @@ async def analyze_insurance_policy(input: InsurancePolicyInput, request: Request
 async def analyze_auto_purchase(input: AutoPurchaseInput, request: Request):
     """Analyze a vehicle purchase contract"""
     try:
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_auto_purchase_analysis(input.contract_text, input.state, input.vehicle_price, input.trade_in_value)
-            save_upload("auto_purchase", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = AutoPurchaseReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", []))
-            return report
-
-        client = get_client()
-
-        prompt = AUTO_PURCHASE_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            state=input.state or "Not specified",
-            vehicle_price=f"${input.vehicle_price:,}" if input.vehicle_price else "Not specified",
-            trade_in_value=f"${input.trade_in_value:,}" if input.trade_in_value else "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="auto_purchase",
+            report_cls=AutoPurchaseReport,
+            issue_keys=("red_flags",),
+            state=input.state,
+            mock_fn=lambda: mock_auto_purchase_analysis(
+                input.contract_text, input.state, input.vehicle_price, input.trade_in_value
+            ),
+            prompt_fn=lambda: AUTO_PURCHASE_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                state=input.state or "Not specified",
+                vehicle_price=f"${input.vehicle_price:,}" if input.vehicle_price else "Not specified",
+                trade_in_value=f"${input.trade_in_value:,}" if input.trade_in_value else "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("auto_purchase", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = AutoPurchaseReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Auto purchase analysis failed: {str(e)}")
 
@@ -657,50 +393,23 @@ async def analyze_auto_purchase(input: AutoPurchaseInput, request: Request):
 async def analyze_home_improvement(input: HomeImprovementInput, request: Request):
     """Analyze a home improvement / contractor contract"""
     try:
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_home_improvement_analysis(input.contract_text, input.state, input.project_cost)
-            save_upload("home_improvement", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = HomeImprovementReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-            return report
-
-        client = get_client()
-
-        prompt = HOME_IMPROVEMENT_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            state=input.state or "Not specified",
-            project_cost=f"${input.project_cost:,}" if input.project_cost else "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="home_improvement",
+            report_cls=HomeImprovementReport,
+            issue_keys=("red_flags", "missing_protections"),
+            state=input.state,
+            mock_fn=lambda: mock_home_improvement_analysis(input.contract_text, input.state, input.project_cost),
+            prompt_fn=lambda: HOME_IMPROVEMENT_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                state=input.state or "Not specified",
+                project_cost=f"${input.project_cost:,}" if input.project_cost else "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("home_improvement", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = HomeImprovementReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Home improvement analysis failed: {str(e)}")
 
@@ -711,49 +420,22 @@ async def analyze_home_improvement(input: HomeImprovementInput, request: Request
 async def analyze_nursing_home(input: NursingHomeInput, request: Request):
     """Analyze a nursing home admission agreement"""
     try:
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_nursing_home_analysis(input.contract_text, input.state)
-            save_upload("nursing_home", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = NursingHomeReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("illegal_clauses", []))
-            return report
-
-        client = get_client()
-
-        prompt = NURSING_HOME_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            state=input.state or "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="nursing_home",
+            report_cls=NursingHomeReport,
+            issue_keys=("red_flags", "illegal_clauses"),
+            state=input.state,
+            mock_fn=lambda: mock_nursing_home_analysis(input.contract_text, input.state),
+            prompt_fn=lambda: NURSING_HOME_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                state=input.state or "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("nursing_home", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = NursingHomeReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", [])) + len(result.get("illegal_clauses", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Nursing home analysis failed: {str(e)}")
 
@@ -764,49 +446,21 @@ async def analyze_nursing_home(input: NursingHomeInput, request: Request):
 async def analyze_subscription(input: SubscriptionInput, request: Request):
     """Analyze a subscription or SaaS agreement"""
     try:
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_subscription_analysis(input.contract_text, input.monthly_cost)
-            save_upload("subscription", input.contract_text, None, result, user_id=user.id if user else None)
-            report = SubscriptionReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("dark_patterns", []))
-            return report
-
-        client = get_client()
-
-        prompt = SUBSCRIPTION_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            monthly_cost=f"${input.monthly_cost:,.2f}" if input.monthly_cost else "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="subscription",
+            report_cls=SubscriptionReport,
+            issue_keys=("red_flags", "dark_patterns"),
+            mock_fn=lambda: mock_subscription_analysis(input.contract_text, input.monthly_cost),
+            prompt_fn=lambda: SUBSCRIPTION_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                monthly_cost=f"${input.monthly_cost:,.2f}" if input.monthly_cost else "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("subscription", input.contract_text, None, result, user_id=user.id if user else None)
-
-        report = SubscriptionReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", [])) + len(result.get("dark_patterns", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Subscription analysis failed: {str(e)}")
 
@@ -817,49 +471,22 @@ async def analyze_subscription(input: SubscriptionInput, request: Request):
 async def analyze_debt_settlement(input: DebtSettlementInput, request: Request):
     """Analyze a debt settlement agreement"""
     try:
-        doc_hash = hash_document(input.contract_text)
-        user = get_current_user(request)
-        is_premium = False
-        if user:
-            is_premium = check_premium_access(user.id, doc_hash)
-
-        if MOCK_MODE:
-            result = mock_debt_settlement_analysis(input.contract_text, input.state, input.debt_amount)
-            save_upload("debt_settlement", input.contract_text, input.state, result, user_id=user.id if user else None)
-            report = DebtSettlementReport(**result)
-            report.document_hash = doc_hash
-            report.is_premium = is_premium
-            report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-            return report
-
-        client = get_client()
-
-        prompt = DEBT_SETTLEMENT_ANALYSIS_PROMPT.format(
-            contract_text=input.contract_text[:15000],
-            state=input.state or "Not specified",
-            debt_amount=f"${input.debt_amount:,}" if input.debt_amount else "Not specified"
+        return run_analysis(
+            request=request,
+            text=input.contract_text,
+            doc_type="debt_settlement",
+            report_cls=DebtSettlementReport,
+            issue_keys=("red_flags", "missing_protections"),
+            state=input.state,
+            mock_fn=lambda: mock_debt_settlement_analysis(input.contract_text, input.state, input.debt_amount),
+            prompt_fn=lambda: DEBT_SETTLEMENT_ANALYSIS_PROMPT.format(
+                contract_text=input.contract_text[:MAX_DOC_CHARS],
+                state=input.state or "Not specified",
+                debt_amount=f"${input.debt_amount:,}" if input.debt_amount else "Not specified"
+            ),
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            max_completion_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        response_text = response.choices[0].message.content
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-
-        result = json.loads(response_text.strip())
-        save_upload("debt_settlement", input.contract_text, input.state, result, user_id=user.id if user else None)
-
-        report = DebtSettlementReport(**result)
-        report.document_hash = doc_hash
-        report.is_premium = is_premium
-        report.total_issues = len(result.get("red_flags", [])) + len(result.get("missing_protections", []))
-        return report
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Debt settlement analysis failed: {str(e)}")

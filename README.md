@@ -1,28 +1,42 @@
-# INSURANCE.EXE
+# CAN THEY FUCK ME?
 
-> *messy docs → clean data* | pixel perfect coverage analysis
+> paste the contract → find out how they fuck you | [cantheyfuckme.com](https://cantheyfuckme.com)
 
-A retro-styled AI-powered insurance document intelligence tool. Feed it messy COIs, quotes, policy summaries, and email forwards — get structured data and polished client proposals in minutes.
+A retro-styled, AI-powered contract analyzer for consumers. Paste (or upload) a contract before you sign it and get a plain-English breakdown of the clauses designed to screw you — with severity ratings, state-specific law references, and what to do about each one.
 
-Built for the forward-deployed AI engineers at [Fulcrum Tech](https://withfulcrum.com).
+Free to use. No paywall. Optional sign-in saves your analysis history.
 
 ![Williamsburg 2015 vibes](https://img.shields.io/badge/aesthetic-williamsburg%202015-ff6b6b?style=flat-square)
-![Python](https://img.shields.io/badge/python-3.11+-4ecdc4?style=flat-square)
+![Python](https://img.shields.io/badge/python-3.12-4ecdc4?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/typescript-5.0+-4ecdc4?style=flat-square)
 
-## What It Does
+## What It Analyzes
 
-1. **Paste messy insurance documents** - COIs, quotes, policy renewals, forwarded emails
-2. **AI extracts structured data** - policy info, coverages, limits, exclusions, compliance issues
-3. **Generate polished proposals** - client-ready summaries in plain English
-4. **Risk scoring** - automated coverage adequacy assessment
+| Document | What it catches |
+|----------|-----------------|
+| Gym/fitness memberships | in-person-only cancellation, auto-renew traps, annual fees |
+| Apartment & commercial leases | one-sided indemnification, waived protections, personal guaranties |
+| Employment contracts | non-competes (with state enforceability), arbitration, IP overreach |
+| Freelancer agreements | net-90 payment, unlimited revisions, work-for-hire overreach |
+| Influencer/sponsorship deals | perpetual usage rights, category exclusivity |
+| Timeshares | rescission deadlines by state, perpetuity clauses, fee escalators |
+| Insurance policies | exclusions, ACV-vs-replacement traps, anti-concurrent causation |
+| Auto purchase contracts | doc fee caps by state, yo-yo financing, junk add-ons |
+| Home improvement contracts | mechanics liens, deposit limits, missing completion dates |
+| Nursing home admissions | illegal responsible-party clauses, forced arbitration |
+| Subscriptions/SaaS | auto-renewal dark patterns, cancellation friction |
+| Debt settlements | statute-of-limitations restarts, missing paid-in-full language |
+| Certificates of Insurance | coverage gaps vs. contract requirements (COI compliance) |
+
+Documents are auto-classified on paste; PDFs and images go through vision OCR first.
 
 ## The Stack
 
-- **Frontend**: React + TypeScript + Vite
-- **Backend**: Python + FastAPI
-- **AI**: Claude (Anthropic API)
-- **Aesthetic**: Williamsburg 2015 pixel art (Press Start 2P, VT323, CRT scanlines)
+- **Frontend**: React + TypeScript + Vite (Press Start 2P, VT323, CRT scanlines)
+- **Backend**: Python 3.12 + FastAPI
+- **AI**: OpenAI API (`OPENAI_MODEL` for analysis, `CLASSIFY_MODEL` for cheap classification)
+- **Database**: PostgreSQL 16 (optional — runs without it, minus history/auth)
+- **Hosting**: Docker Compose on a VPS behind Caddy (TLS)
 
 ## Quick Start
 
@@ -31,87 +45,76 @@ Built for the forward-deployed AI engineers at [Fulcrum Tech](https://withfulcru
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+source venv/bin/activate
 pip install -r requirements.txt
 
-# Set your Anthropic API key
-export ANTHROPIC_API_KEY=your_key_here
+# Either set a real key...
+export OPENAI_API_KEY=your_key_here
+# ...or run fully offline with keyword-based mock analysis
+export MOCK_MODE=true
 
-# Run the server
-python main.py
+python main.py        # serves http://localhost:8081
 ```
-
-Backend runs at `http://localhost:8081`
 
 ### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev           # serves http://localhost:5173, talks to :8081
 ```
 
-Frontend runs at `http://localhost:5173`
+### Environment Variables
 
-## API Endpoints
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENAI_API_KEY` | — | Required unless `MOCK_MODE=true` |
+| `MOCK_MODE` | `false` | Keyword-based mock analysis, no API calls |
+| `OPENAI_MODEL` | `gpt-5.2` | Main analysis + OCR model |
+| `CLASSIFY_MODEL` | `gpt-5.4-mini` | Cheap document-type classification |
+| `DATABASE_URL` | — | Postgres; omit to run without persistence |
+| `CORS_ORIGINS` | prod + localhost | Comma-separated allowed origins |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | Legacy credit purchases (unused; donations use a payment link) |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/extract` | POST | Extract structured data from document text |
-| `/api/compare` | POST | Compare multiple insurance quotes |
-| `/api/generate-proposal` | POST | Generate client-ready proposal from extracted data |
+## API
 
-## Sample Documents
+All analyzer endpoints accept JSON and return a typed report with `overall_risk`, `risk_score`, `red_flags[]`, and document metadata.
 
-The app includes three sample documents to demo:
-
-1. **Messy COI Email** - Forwarded certificate with casual notes
-2. **Scanned Quote PDF (OCR)** - Commercial property quote with formatting artifacts
-3. **Policy Renewal Notice** - Coverage changes and exclusions
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/classify` | Detect document type |
+| `POST /api/ocr` | PDF/image → text (vision) |
+| `POST /api/analyze-{lease,gym,employment,freelancer,influencer,timeshare,insurance-policy,auto-purchase,home-improvement,nursing-home,subscription,debt-settlement}` | Contract analysis |
+| `POST /api/check-coi-compliance` | COI vs. project requirements |
+| `POST /api/auth/{signup,login,logout}`, `GET /api/auth/me` | Optional accounts |
+| `GET /api/user/history` | Saved analyses |
+| `GET /api/{states,project-types}` | Reference data |
+| `POST /api/waitlist` | Request a new document type |
+| `GET /api/health` | Liveness |
 
 ## Testing
 
-### Run the Test Suite
-
 ```bash
 cd backend
-source venv/bin/activate
+pip install -r requirements-dev.txt
 
-# Run with mock mode (no API key required)
+# Offline suite: mock mode, no DB, no API key needed
+python -m pytest tests/
+
+# Legacy end-to-end suite against a running server
 MOCK_MODE=true python main.py &
-python test_api.py
-
-# Run with real API
-export ANTHROPIC_API_KEY=your_key_here
-python main.py &
 python test_api.py
 ```
 
-### Test Coverage
+`test_expensive.py` exercises real LLM calls and costs money — run deliberately.
 
-| Test | Description |
-|------|-------------|
-| Health Check | API connectivity |
-| Extract Messy COI | Forwarded email with informal formatting |
-| Extract Property Quote | Commercial property with coverage table |
-| Extract Renewal Notice | Policy changes and new exclusions |
-| Extract Minimal Doc | Sparse document handling |
-| Extract Empty Doc | Empty input validation |
-| Extract Gibberish | Non-insurance content handling |
-| Generate Proposal | Client proposal from extracted data |
-| Invalid JSON Payload | Error handling for malformed requests |
-| Missing Text Field | Required field validation |
+## Deployment
 
-## Why This Exists
+`./deploy.sh` builds the Docker image (frontend build baked in, served by FastAPI), ships it to the VPS, and restarts via `docker-compose.prod.yml`. Caddy terminates TLS for `cantheyfuckme.com` and reverse-proxies to port 8081.
 
-Insurance brokers spend hours manually extracting data from messy documents. This tool demonstrates how AI can:
+## Disclaimer
 
-- Parse unstructured insurance documents
-- Extract coverage details, limits, and exclusions
-- Flag compliance issues automatically
-- Generate professional client communications
-
-*"We went from waiting days for mediocre outsourced work to standout proposals in minutes."*
+This is automated document analysis, not legal advice. For decisions that matter, talk to a lawyer licensed in your state.
 
 ## License
 

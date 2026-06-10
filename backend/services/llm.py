@@ -1,7 +1,9 @@
+import json
+
 from openai import OpenAI
 from fastapi import HTTPException
 
-from config import get_api_key, MOCK_MODE
+from config import get_api_key, MOCK_MODE, OPENAI_MODEL
 
 
 # Lazy client initialization
@@ -33,6 +35,34 @@ def clean_llm_response(response_text: str) -> str:
         if response_text.startswith("json"):
             response_text = response_text[4:]
     return response_text.strip()
+
+
+def llm_text_call(prompt: str, *, model: str = None, max_tokens: int = 4096, system: str = None) -> str:
+    """Send a single prompt to the LLM and return the cleaned text response."""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = get_client().chat.completions.create(
+        model=model or OPENAI_MODEL,
+        max_completion_tokens=max_tokens,
+        messages=messages,
+    )
+
+    content = response.choices[0].message.content
+    if not content:
+        raise HTTPException(status_code=502, detail="Empty response from language model")
+    return clean_llm_response(content)
+
+
+def llm_json_call(prompt: str, *, model: str = None, max_tokens: int = 4096, system: str = None) -> dict:
+    """Send a single prompt to the LLM and parse the JSON response."""
+    text = llm_text_call(prompt, model=model, max_tokens=max_tokens, system=system)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
 
 
 def parse_limit_to_number(limit_str: str) -> int:

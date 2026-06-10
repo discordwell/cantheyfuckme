@@ -4,17 +4,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from config import CORS_ORIGINS
 from database import init_db
 from routers import auth, payments, documents, analyzers, reference, waitlist
 
 # Initialize database on startup
 init_db()
 
-app = FastAPI(title="Insurance LLM", description="Pixel-powered insurance document intelligence")
+app = FastAPI(
+    title="Can They Fuck Me?",
+    description="AI contract analysis: find the clauses designed to screw you before you sign",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,14 +39,16 @@ async def health():
 
 
 # Serve built frontend if present (production Docker build)
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+FRONTEND_DIR = (Path(__file__).parent.parent / "frontend" / "dist").resolve()
 if FRONTEND_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
 
     @app.get("/{path:path}")
     async def serve_frontend(path: str):
-        file = FRONTEND_DIR / path
-        if file.is_file():
+        # Resolve and confine to the dist directory so crafted paths
+        # (e.g. /../backend/.env) cannot escape it.
+        file = (FRONTEND_DIR / path).resolve()
+        if file.is_file() and file.is_relative_to(FRONTEND_DIR):
             return FileResponse(file)
         return FileResponse(FRONTEND_DIR / "index.html")
 

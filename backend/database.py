@@ -28,9 +28,4 @@ def init_db():
 def get_db():
     if SessionLocal is None:
         return None
-    db = SessionLocal()
-    try:
-        return db
-    except:
-        db.close()
-        raise
+    return SessionLocal()

@@ -11,7 +11,23 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 MOCK_MODE = os.environ.get("MOCK_MODE", "false").lower() == "true"
 
 # OpenAI
-OPENAI_MODEL = "gpt-5.2"
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
+# Cheaper/faster model for lightweight tasks like document classification
+CLASSIFY_MODEL = os.environ.get("CLASSIFY_MODEL", "gpt-5.4-mini")
+
+# CORS: production is same-origin (frontend served by this app behind Caddy),
+# so this list only needs the prod domains plus local dev servers.
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS",
+        "https://cantheyfuckme.com,https://www.cantheyfuckme.com,"
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:4173,http://127.0.0.1:4173,"
+        "http://localhost:8081,http://127.0.0.1:8081",
+    ).split(",")
+    if origin.strip()
+]
 
 # Stripe
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")

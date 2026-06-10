@@ -515,7 +515,8 @@ class InsuranceLLMTester:
 
     def test_health_check(self):
         """Test that the API is running and responding"""
-        status, data = self._make_request("GET", "/")
+        # "/" serves the SPA in production builds; the JSON health check lives under /api
+        status, data = self._make_request("GET", "/api/health")
 
         if status == 0:
             self._add_result("Health Check", False, data.get("error", "Unknown error"))
