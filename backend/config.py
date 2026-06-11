@@ -15,6 +15,9 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.2")
 # Cheaper/faster model for lightweight tasks like document classification
 CLASSIFY_MODEL = os.environ.get("CLASSIFY_MODEL", "gpt-5.4-mini")
 
+# Documents are truncated to this many characters before being sent to the LLM
+MAX_DOC_CHARS = int(os.environ.get("MAX_DOC_CHARS", "15000"))
+
 # CORS: production is same-origin (frontend served by this app behind Caddy),
 # so this list only needs the prod domains plus local dev servers.
 CORS_ORIGINS = [

@@ -1,5 +1,9 @@
+import logging
+
 from database import get_db
 from models import Upload, Waitlist
+
+logger = logging.getLogger(__name__)
 
 
 def save_upload(doc_type: str, text: str, state: str = None, analysis: dict = None, user_agent: str = None, user_id: int = None):
@@ -26,7 +30,7 @@ def save_upload(doc_type: str, text: str, state: str = None, analysis: dict = No
         db.refresh(upload)
         return upload.id
     except Exception as e:
-        print(f"Error saving upload: {e}")
+        logger.error("Error saving upload: %s", e)
         db.rollback()
         return None
     finally:
@@ -50,7 +54,7 @@ def save_waitlist(email: str, doc_type: str, text_preview: str = None):
         db.refresh(entry)
         return entry.id
     except Exception as e:
-        print(f"Error saving waitlist: {e}")
+        logger.error("Error saving waitlist: %s", e)
         db.rollback()
         return None
     finally:

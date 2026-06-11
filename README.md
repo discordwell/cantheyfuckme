@@ -74,6 +74,7 @@ npm run dev           # serves http://localhost:5173, talks to :8081
 | `CLASSIFY_MODEL` | `gpt-5.4-mini` | Cheap document-type classification |
 | `DATABASE_URL` | — | Postgres; omit to run without persistence |
 | `CORS_ORIGINS` | prod + localhost | Comma-separated allowed origins |
+| `MAX_DOC_CHARS` | `15000` | Document text cap before LLM prompts |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | Legacy credit purchases (unused; donations use a payment link) |
 
 ## API

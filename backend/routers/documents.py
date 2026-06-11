@@ -2,9 +2,9 @@ import json
 import base64
 
 from fastapi import APIRouter, HTTPException
-from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL
+from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS
 from services.llm import get_client, llm_json_call, llm_text_call
-from services.mock.extract import mock_extract
+from services.mock.extract import mock_extract, mock_compare
 from schemas.common import DocumentInput, ExtractedPolicy, OCRInput, ClassifyInput, ClassifyResult
 from data.supported_doc_types import SUPPORTED_DOC_TYPES
 from prompts.extraction import EXTRACTION_PROMPT
@@ -22,7 +22,7 @@ async def extract_document(doc: DocumentInput):
             extracted = mock_extract(doc.text)
             return ExtractedPolicy(**extracted)
 
-        extracted = llm_json_call(EXTRACTION_PROMPT.replace("<<DOCUMENT>>", doc.text))
+        extracted = llm_json_call(EXTRACTION_PROMPT.replace("<<DOCUMENT>>", doc.text[:MAX_DOC_CHARS]))
         return ExtractedPolicy(**extracted)
 
     except HTTPException:
@@ -42,6 +42,9 @@ async def compare_quotes(quotes: list[DocumentInput]):
     for quote in quotes:
         extracted = await extract_document(quote)
         extracted_quotes.append(extracted)
+
+    if MOCK_MODE:
+        return mock_compare([q.model_dump() for q in extracted_quotes])
 
     # Generate comparison
     comparison_prompt = f"""Compare these {len(extracted_quotes)} insurance quotes and provide a recommendation.

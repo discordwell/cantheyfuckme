@@ -110,3 +110,76 @@ def mock_extract(text: str) -> dict:
         "compliance_issues": [],
         "summary": f"Policy for {insured or 'unknown insured'} with {len(coverages)} coverage types."
     }
+
+
+def mock_compare(quotes: list) -> dict:
+    """Generate a deterministic mock comparison of extracted quotes for testing.
+
+    Takes ExtractedPolicy-shaped dicts and mirrors the JSON shape the LLM
+    comparison prompt asks for: recommendation, comparison_table, pros_cons,
+    cost_analysis, risk_assessment.
+    """
+    def premium_number(quote):
+        raw = (quote.get("total_premium") or "").replace("$", "").replace(",", "")
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    premiums = {i: premium_number(q) for i, q in enumerate(quotes)}
+    known_premiums = {i: p for i, p in premiums.items() if p is not None}
+    cheapest = min(known_premiums, key=known_premiums.get) if known_premiums else None
+    best = max(range(len(quotes)), key=lambda i: quotes[i].get("risk_score") or 0)
+
+    comparison_table = [
+        {
+            "quote": i + 1,
+            "carrier": q.get("carrier") or "Unknown",
+            "premium": q.get("total_premium") or "Not specified",
+            "coverage_count": len(q.get("coverages") or []),
+            "exclusion_count": len(q.get("exclusions") or []),
+            "risk_score": q.get("risk_score"),
+        }
+        for i, q in enumerate(quotes)
+    ]
+
+    pros_cons = {}
+    for i, q in enumerate(quotes):
+        pros, cons = [], []
+        if i == cheapest:
+            pros.append("Lowest premium of the quotes compared")
+        if (q.get("risk_score") or 0) >= 80:
+            pros.append("Strong coverage adequacy score")
+        if len(q.get("coverages") or []) >= 3:
+            pros.append("Broad set of coverages")
+        if q.get("exclusions"):
+            cons.append(f"{len(q['exclusions'])} exclusions to review")
+        if not q.get("total_premium"):
+            cons.append("Premium not stated in the document")
+        pros_cons[str(i)] = {
+            "pros": pros or ["No standout advantages identified"],
+            "cons": cons or ["No notable concerns identified"],
+        }
+
+    if cheapest is not None and known_premiums:
+        spread = max(known_premiums.values()) - min(known_premiums.values())
+        cost_analysis = (
+            f"Quote {cheapest + 1} has the lowest stated premium "
+            f"(${min(known_premiums.values()):,.0f}); the spread across quotes is ${spread:,.0f}."
+        )
+    else:
+        cost_analysis = "Premiums were not stated clearly enough to compare costs."
+
+    return {
+        "recommendation": (
+            f"Quote {best + 1} ({quotes[best].get('carrier') or 'unknown carrier'}) offers the "
+            f"strongest coverage profile of the {len(quotes)} quotes compared. [Mock comparison]"
+        ),
+        "comparison_table": comparison_table,
+        "pros_cons": pros_cons,
+        "cost_analysis": cost_analysis,
+        "risk_assessment": (
+            f"Quote {best + 1} scores highest on coverage adequacy "
+            f"({quotes[best].get('risk_score') or 'N/A'}/100)."
+        ),
+    }

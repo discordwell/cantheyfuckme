@@ -1,13 +1,16 @@
+import logging
 import secrets
 import hashlib
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import bcrypt
 from fastapi import Request
 
-from database import get_db
+from database import get_db, utcnow
 from models import User, AuthSession, PremiumUnlock
+
+logger = logging.getLogger(__name__)
 
 
 def hash_password(password: str) -> str:
@@ -46,7 +49,7 @@ def create_user(email: str, password: str) -> Optional[User]:
         db.refresh(user)
         return user
     except Exception as e:
-        print(f"Error creating user: {e}")
+        logger.error("Error creating user: %s", e)
         db.rollback()
         return None
     finally:
@@ -63,7 +66,7 @@ def get_user_by_email(email: str) -> Optional[User]:
         user = db.query(User).filter(User.email == email.lower().strip()).first()
         return user
     except Exception as e:
-        print(f"Error getting user: {e}")
+        logger.error("Error getting user: %s", e)
         return None
     finally:
         db.close()
@@ -80,13 +83,13 @@ def create_session(user_id: int) -> Optional[str]:
         session = AuthSession(
             user_id=user_id,
             token=token,
-            expires_at=datetime.utcnow() + timedelta(days=30)
+            expires_at=utcnow() + timedelta(days=30)
         )
         db.add(session)
         db.commit()
         return token
     except Exception as e:
-        print(f"Error creating session: {e}")
+        logger.error("Error creating session: %s", e)
         db.rollback()
         return None
     finally:
@@ -105,13 +108,13 @@ def get_user_from_token(token: str) -> Optional[User]:
     try:
         session = db.query(AuthSession).filter(
             AuthSession.token == token,
-            AuthSession.expires_at > datetime.utcnow()
+            AuthSession.expires_at > utcnow()
         ).first()
         if session:
             return db.query(User).filter(User.id == session.user_id).first()
         return None
     except Exception as e:
-        print(f"Error getting user from token: {e}")
+        logger.error("Error getting user from token: %s", e)
         return None
     finally:
         db.close()
@@ -128,7 +131,7 @@ def delete_session(token: str) -> bool:
         db.commit()
         return True
     except Exception as e:
-        print(f"Error deleting session: {e}")
+        logger.error("Error deleting session: %s", e)
         db.rollback()
         return False
     finally:
@@ -149,7 +152,7 @@ def add_credits_to_user(user_id: int, credits: int) -> bool:
             return True
         return False
     except Exception as e:
-        print(f"Error adding credits: {e}")
+        logger.error("Error adding credits: %s", e)
         db.rollback()
         return False
     finally:
@@ -182,7 +185,7 @@ def use_credit(user_id: int, document_hash: str) -> bool:
         db.commit()
         return True
     except Exception as e:
-        print(f"Error using credit: {e}")
+        logger.error("Error using credit: %s", e)
         db.rollback()
         return False
     finally:
@@ -202,7 +205,7 @@ def check_premium_access(user_id: int, document_hash: str) -> bool:
         ).first()
         return unlock is not None
     except Exception as e:
-        print(f"Error checking premium access: {e}")
+        logger.error("Error checking premium access: %s", e)
         return False
     finally:
         db.close()

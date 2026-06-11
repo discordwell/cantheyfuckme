@@ -1,13 +1,12 @@
-from datetime import datetime
 from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, Boolean, ForeignKey
-from database import Base
+from database import Base, utcnow
 
 
 class Upload(Base):
     __tablename__ = "uploads"
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     document_type = Column(String(50), index=True)
     document_text = Column(Text)
     text_length = Column(Integer)
@@ -25,7 +24,7 @@ class Waitlist(Base):
     __tablename__ = "waitlist"
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     email = Column(String(255), index=True)
     document_type = Column(String(100))
     document_text_preview = Column(Text, nullable=True)

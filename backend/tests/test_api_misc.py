@@ -23,6 +23,20 @@ def test_compare_requires_two_quotes(client):
     assert response.status_code == 400
 
 
+def test_compare_two_quotes_mock(client):
+    # Regression: this used to 500 in mock mode because the comparison step
+    # called the real LLM client unconditionally.
+    response = client.post("/api/compare", json=[
+        {"text": "Policy for Acme LLC. Premium total: $1,200/yr. GL: $1M. Umbrella: $2M"},
+        {"text": "Policy for Acme LLC. Premium total: $900/yr. GL: $500K"},
+    ])
+    assert response.status_code == 200
+    body = response.json()
+    assert "recommendation" in body
+    assert len(body["comparison_table"]) == 2
+    assert set(body["pros_cons"].keys()) == {"0", "1"}
+
+
 def test_generate_proposal_mock(client):
     response = client.post("/api/generate-proposal", json={"insured_name": "Acme LLC"})
     assert response.status_code == 200

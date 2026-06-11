@@ -1,7 +1,7 @@
 import json
 
 from fastapi import APIRouter, HTTPException, Request
-from config import MOCK_MODE
+from config import MOCK_MODE, MAX_DOC_CHARS
 from services.llm import llm_json_call, calculate_extraction_confidence
 from services.analysis import get_doc_context, finalize_report, run_analysis
 from services.db_ops import save_upload
@@ -59,9 +59,6 @@ from data.red_flags import LEASE_RED_FLAGS, GYM_RED_FLAGS, EMPLOYMENT_RED_FLAGS
 
 router = APIRouter(prefix="/api", tags=["analyzers"])
 
-# Documents are truncated to this length before being sent to the LLM
-MAX_DOC_CHARS = 15000
-
 
 # ============== COI COMPLIANCE CHECK ==============
 
@@ -87,7 +84,7 @@ async def check_coi_compliance(input: COIComplianceInput, request: Request):
             result = mock_compliance_check(coi_data, requirements, input.state)
         else:
             # Step 1: Extract COI data
-            coi_data = llm_json_call(COI_EXTRACTION_PROMPT.replace("<<DOCUMENT>>", input.coi_text))
+            coi_data = llm_json_call(COI_EXTRACTION_PROMPT.replace("<<DOCUMENT>>", input.coi_text[:MAX_DOC_CHARS]))
 
             # Step 2: Check compliance
             compliance_prompt = (

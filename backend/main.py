@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,6 +8,12 @@ from fastapi.responses import FileResponse
 from config import CORS_ORIGINS
 from database import init_db
 from routers import auth, payments, documents, analyzers, reference, waitlist
+
+# Make app module logs (INFO+) visible alongside uvicorn's own logging.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 # Initialize database on startup
 init_db()

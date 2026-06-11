@@ -1,9 +1,13 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from services.auth import (create_user, get_user_by_email, verify_password,
                            create_session, delete_session, get_current_user)
 from schemas.auth import SignupInput, LoginInput, AuthResponse
 from database import get_db
 from models import Upload
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -142,7 +146,7 @@ async def get_user_history(request: Request):
             ]
         }
     except Exception as e:
-        print(f"Error fetching history: {e}")
+        logger.error("Error fetching history: %s", e)
         return {"uploads": []}
     finally:
         db.close()

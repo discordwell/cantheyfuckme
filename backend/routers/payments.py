@@ -1,9 +1,13 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 import stripe
 from config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 from services.auth import (get_current_user, add_credits_to_user, use_credit,
                            check_premium_access, get_user_by_email)
 from schemas.auth import CheckoutInput
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["payments"])
 
@@ -47,7 +51,7 @@ async def create_checkout_session(input: CheckoutInput, request: Request):
         return {"checkout_url": checkout_session.url, "session_id": checkout_session.id}
 
     except Exception as e:
-        print(f"Stripe error: {e}")
+        logger.error("Stripe error: %s", e)
         raise HTTPException(status_code=500, detail="Failed to create checkout session")
 
 
@@ -64,9 +68,9 @@ async def stripe_webhook(request: Request):
         event = stripe.Webhook.construct_event(
             payload, sig_header, STRIPE_WEBHOOK_SECRET
         )
-    except ValueError as e:
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError as e:
+    except stripe.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     # Handle checkout.session.completed
@@ -81,7 +85,7 @@ async def stripe_webhook(request: Request):
             # Add credit and unlock document
             add_credits_to_user(int(user_id), 1)
             use_credit(int(user_id), document_hash)
-            print(f"Unlocked document {document_hash} for user {user_id}")
+            logger.info("Unlocked document %s for user %s", document_hash, user_id)
 
     return {"received": True}
 

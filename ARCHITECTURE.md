@@ -65,10 +65,11 @@ State-specific intelligence comes from `data/` (e.g. gym cancellation laws, non-
 - Every analysis is saved to `uploads` (with `user_id` when signed in) → powers `/api/user/history`.
 - `PremiumUnlock`/credits are legacy of a paywall era; the app is free now, code retained for Stripe re-enablement.
 - No `DATABASE_URL` → all persistence no-ops; analysis still works.
+- Engine uses `pool_pre_ping` (Postgres restarts don't surface as stale-connection errors); table creation retries lazily on first request if the DB wasn't up at boot.
 
 ## Configuration
 
-All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis/OCR), `CLASSIFY_MODEL` (cheap classification). `CORS_ORIGINS` defaults to prod domains + localhost dev ports; production traffic is same-origin so CORS only matters for local dev.
+All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis/OCR), `CLASSIFY_MODEL` (cheap classification). `MAX_DOC_CHARS` caps document text before prompt interpolation (default 15k, enforced on every LLM path including COI/extract). `CORS_ORIGINS` defaults to prod domains + localhost dev ports; production traffic is same-origin so CORS only matters for local dev.
 
 ## Security Notes
 
