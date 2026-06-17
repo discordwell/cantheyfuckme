@@ -2,7 +2,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from services.auth import (create_user, get_user_by_email, verify_password,
-                           create_session, delete_session, get_current_user)
+                           dummy_verify, create_session, delete_session,
+                           get_current_user)
 from schemas.auth import SignupInput, LoginInput, AuthResponse
 from database import get_db
 from models import Upload
@@ -58,13 +59,17 @@ async def signup(input: SignupInput, response: Response):
 @router.post("/auth/login", response_model=AuthResponse)
 async def login(input: LoginInput, response: Response):
     """Log in to existing account"""
-    # Get user
     user = get_user_by_email(input.email)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # Verify password
-    if not verify_password(input.password, user.password_hash):
+    # Always run a bcrypt comparison, even when the email is unknown, so response
+    # timing is the same whether or not the account exists. Otherwise the missing
+    # branch would return without hashing and let an attacker enumerate accounts.
+    if user:
+        password_ok = verify_password(input.password, user.password_hash)
+    else:
+        password_ok = dummy_verify(input.password)
+
+    if not user or not password_ok:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     # Create session

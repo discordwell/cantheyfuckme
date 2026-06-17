@@ -12,20 +12,55 @@ from models import User, AuthSession, PremiumUnlock
 
 logger = logging.getLogger(__name__)
 
+# bcrypt only ever uses the first 72 bytes of a password and, as of bcrypt 5.0,
+# raises ValueError when handed more rather than silently truncating. We truncate
+# to that boundary ourselves so a long passphrase (e.g. from a password manager)
+# hashes and verifies consistently instead of crashing the endpoint with a 500.
+# This matches bcrypt's own guidance and its pre-5.0 behaviour, so every existing
+# stored hash (all created from <=72-byte inputs) keeps verifying unchanged.
+BCRYPT_MAX_BYTES = 72
+
+
+def _password_bytes(password: str) -> bytes:
+    """Encode a password to the byte slice bcrypt will actually consume."""
+    return password.encode('utf-8')[:BCRYPT_MAX_BYTES]
+
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode('utf-8')
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a password against its hash"""
-    return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    """Verify a password against its hash. Never raises: a malformed or empty
+    stored hash is treated as a non-match (fail closed) rather than a 500."""
+    try:
+        return bcrypt.checkpw(_password_bytes(password), password_hash.encode('utf-8'))
+    except (ValueError, TypeError):
+        return False
 
 
 def generate_session_token() -> str:
     """Generate a secure random session token"""
     return secrets.token_urlsafe(32)
+
+
+# A bcrypt hash of a random throwaway secret, computed lazily on first use (like
+# get_client() in services/llm.py) so importing this module has no bcrypt side
+# effect. login() verifies the submitted password against this whenever the email
+# is unknown, so a missing account costs the same bcrypt work as a wrong password.
+# Without it, "no such user" would return without hashing at all, and the timing
+# gap would let an attacker enumerate which emails are registered.
+_dummy_password_hash = None
+
+
+def dummy_verify(password: str) -> bool:
+    """Run a bcrypt comparison against a throwaway hash. Always returns False;
+    exists only to equalise login response timing for non-existent accounts."""
+    global _dummy_password_hash
+    if _dummy_password_hash is None:
+        _dummy_password_hash = hash_password(secrets.token_urlsafe(32))
+    return verify_password(password, _dummy_password_hash)
 
 
 def hash_document(text: str) -> str:
