@@ -75,6 +75,9 @@ npm run dev           # serves http://localhost:5173, talks to :8081
 | `DATABASE_URL` | — | Postgres; omit to run without persistence |
 | `CORS_ORIGINS` | prod + localhost | Comma-separated allowed origins |
 | `MAX_DOC_CHARS` | `15000` | Document text cap before LLM prompts |
+| `MAX_INPUT_CHARS` | `1000000` | Reject document text longer than this (HTTP 413) before persisting/processing |
+| `MAX_OCR_FILE_BYTES` | `15728640` | Reject OCR uploads larger than this (measured after base64 decode) |
+| `MAX_COMPARE_QUOTES` | `10` | Max quotes `/compare` will extract in one request |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | Legacy credit purchases (unused; donations use a payment link) |
 
 ## API

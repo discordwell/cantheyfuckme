@@ -76,6 +76,7 @@ All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis
 - SPA fallback resolves requested paths and confines them to `frontend/dist` (path-traversal guard in `main.py`, regression-tested).
 - CORS is an explicit origin list (credentials mode), not a wildcard.
 - Session tokens are 32-byte `secrets.token_urlsafe`; passwords bcrypt-hashed.
+- Public endpoints enforce size ceilings (`services/limits.py`): document text > `MAX_INPUT_CHARS` and OCR uploads > `MAX_OCR_FILE_BYTES` are rejected with `413` before they're persisted, held in memory, or decoded; `/compare` caps quote count at `MAX_COMPARE_QUOTES`. The ceilings sit far above `MAX_DOC_CHARS` (the only text the model sees) so real documents are never refused. The analyzer guard lives in the shared `get_doc_context`, so every analyzer (plus the two-step COI/lease flows) inherits it. Malformed OCR base64 is a `400`, not a `500`.
 
 ## Testing
 

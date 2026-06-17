@@ -75,16 +75,16 @@ def parse_limit_to_number(limit_str: str) -> int:
     if 'M' in cleaned:
         try:
             return int(float(cleaned.replace('M', '')) * 1000000)
-        except:
+        except (ValueError, OverflowError):
             return 0
     if 'K' in cleaned:
         try:
             return int(float(cleaned.replace('K', '')) * 1000)
-        except:
+        except (ValueError, OverflowError):
             return 0
     try:
         return int(cleaned)
-    except:
+    except (ValueError, OverflowError):
         return 0
 
 

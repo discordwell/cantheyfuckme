@@ -1,9 +1,11 @@
 import json
 import base64
+import binascii
 
 from fastapi import APIRouter, HTTPException
-from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS
+from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS, MAX_COMPARE_QUOTES
 from services.llm import get_client, llm_json_call, llm_text_call
+from services.limits import check_text_size, check_ocr_file_size
 from services.mock.extract import mock_extract, mock_compare
 from schemas.common import DocumentInput, ExtractedPolicy, OCRInput, ClassifyInput, ClassifyResult
 from data.supported_doc_types import SUPPORTED_DOC_TYPES
@@ -17,6 +19,8 @@ router = APIRouter(prefix="/api", tags=["documents"])
 async def extract_document(doc: DocumentInput):
     """Extract structured data from insurance document text"""
     try:
+        check_text_size(doc.text)
+
         # Use mock extraction in mock mode
         if MOCK_MODE:
             extracted = mock_extract(doc.text)
@@ -36,8 +40,13 @@ async def compare_quotes(quotes: list[DocumentInput]):
     """Compare multiple insurance quotes"""
     if len(quotes) < 2:
         raise HTTPException(status_code=400, detail="Need at least 2 quotes to compare")
+    if len(quotes) > MAX_COMPARE_QUOTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many quotes: {len(quotes)} (maximum {MAX_COMPARE_QUOTES}).",
+        )
 
-    # Extract each quote
+    # Extract each quote (extract_document enforces the per-quote size cap)
     extracted_quotes = []
     for quote in quotes:
         extracted = await extract_document(quote)
@@ -137,16 +146,24 @@ Format as markdown with clear sections. Keep it concise but comprehensive."""
 async def ocr_document(input: OCRInput):
     """Extract text from PDF or image using OpenAI Vision API"""
     try:
+        check_ocr_file_size(input.file_data)
+
         # Mock mode - return placeholder text
         if MOCK_MODE:
             return {
                 "text": f"[Mock OCR result for {input.file_name}]\n\nSample extracted text would appear here.\nUpload a real document with OPENAI_API_KEY configured."
             }
 
-        client = get_client()
+        # Decode base64 file data. Strip whitespace first so newline-wrapped
+        # payloads (e.g. 76-column MIME encoding) still decode as they did before
+        # validate=True; genuinely malformed data is a 400, not a 500.
+        file_b64 = "".join(input.file_data.split())
+        try:
+            file_bytes = base64.b64decode(file_b64, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid base64 file data")
 
-        # Decode base64 file data
-        file_bytes = base64.b64decode(input.file_data)
+        client = get_client()
 
         # Handle PDFs by converting to images first
         if input.file_type == 'application/pdf':
@@ -203,7 +220,7 @@ async def ocr_document(input: OCRInput):
         # Handle images directly
         elif input.file_type.startswith('image/'):
             media_type = input.file_type
-            data_url = f"data:{media_type};base64,{input.file_data}"
+            data_url = f"data:{media_type};base64,{file_b64}"
 
             response = client.chat.completions.create(
                 model=OPENAI_MODEL,
@@ -242,6 +259,8 @@ async def ocr_document(input: OCRInput):
 async def classify_document(input: ClassifyInput):
     """Classify document type using cheap/fast model"""
     try:
+        check_text_size(input.text)
+
         # Mock mode
         if MOCK_MODE:
             text_lower = input.text.lower()

@@ -37,6 +37,11 @@ def test_clean_strips_bare_fence():
     ("", 0),
     (None, 0),
     ("not a number", 0),
+    # Magnitudes that overflow float to infinity: int(inf) raises OverflowError,
+    # not ValueError, so these must still degrade to 0 (regression guard).
+    ("$1E400M", 0),
+    ("INFM", 0),
+    ("1E309K", 0),
 ])
 def test_parse_limit_to_number(raw, expected):
     assert parse_limit_to_number(raw) == expected

@@ -13,11 +13,18 @@ from pydantic import BaseModel
 from config import MOCK_MODE
 from services.auth import get_current_user, hash_document, check_premium_access
 from services.db_ops import save_upload
+from services.limits import check_text_size
 from services.llm import llm_json_call
 
 
 def get_doc_context(request: Request, text: str) -> Tuple[str, Optional[object], bool]:
-    """Return (document_hash, current_user, is_premium) for a request."""
+    """Return (document_hash, current_user, is_premium) for a request.
+
+    Every analyzer endpoint (plus the two-step COI and lease flows) resolves its
+    context here first, so this is the single place that enforces the input-size
+    ceiling for document text.
+    """
+    check_text_size(text)
     doc_hash = hash_document(text)
     user = get_current_user(request)
     is_premium = check_premium_access(user.id, doc_hash) if user else False
