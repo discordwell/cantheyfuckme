@@ -12,6 +12,10 @@ os.environ["MOCK_MODE"] = "true"
 # Empty string is falsy for `if DATABASE_URL:` and, because the key exists,
 # load_dotenv() will not override it from a local .env file.
 os.environ["DATABASE_URL"] = ""
+# The suite fires far more than the production per-IP ceiling from a single
+# client, so leave rate limiting off here; test_rate_limit.py enables it
+# explicitly (and with tiny limits) where it is the thing under test.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

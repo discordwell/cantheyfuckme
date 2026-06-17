@@ -23,13 +23,23 @@ export function useAnalyzer<T>(authToken: string | null) {
         headers,
         body: JSON.stringify(config.buildBody())
       })
-      if (!res.ok) throw new Error(config.errorMessage)
+      if (!res.ok) {
+        // Prefer the server's message (e.g. rate-limit 429 or too-large 413)
+        // so the user sees why it failed rather than a generic line.
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || config.errorMessage)
+      }
       const data = await res.json()
       setReport(data)
       setTab('report')
     } catch (err) {
       console.error(err)
-      alert(config.errorMessage + ' Make sure the backend is running!')
+      // A TypeError from fetch means the request never reached the server.
+      if (err instanceof TypeError) {
+        alert(config.errorMessage + ' Make sure the backend is running!')
+      } else {
+        alert(err instanceof Error ? err.message : config.errorMessage)
+      }
     } finally {
       setLoading(false)
     }

@@ -78,6 +78,10 @@ npm run dev           # serves http://localhost:5173, talks to :8081
 | `MAX_INPUT_CHARS` | `1000000` | Reject document text longer than this (HTTP 413) before persisting/processing |
 | `MAX_OCR_FILE_BYTES` | `15728640` | Reject OCR uploads larger than this (measured after base64 decode) |
 | `MAX_COMPARE_QUOTES` | `10` | Max quotes `/compare` will extract in one request |
+| `RATE_LIMIT_ENABLED` | `true` | Per-IP request-frequency limiting (set `false` to disable) |
+| `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW` | `120` / `60` | Default tier: requests per window-seconds for non-LLM `/api/` routes |
+| `RATE_LIMIT_STRICT_REQUESTS` / `RATE_LIMIT_STRICT_WINDOW` | `20` / `60` | Strict tier: requests per window-seconds for LLM + auth routes |
+| `RATE_LIMIT_TRUSTED_PROXIES` | `1` | Reverse-proxy hops in front of the app (one Caddy hop); set `0` for no proxy |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | — | Legacy credit purchases (unused; donations use a payment link) |
 
 ## API
@@ -105,8 +109,10 @@ pip install -r requirements-dev.txt
 # Offline suite: mock mode, no DB, no API key needed
 python -m pytest tests/
 
-# Legacy end-to-end suite against a running server
-MOCK_MODE=true python main.py &
+# Legacy end-to-end suite against a running server.
+# Disable rate limiting: the suite fires more LLM-endpoint calls per minute than
+# the production per-IP ceiling, so it would otherwise throttle itself.
+MOCK_MODE=true RATE_LIMIT_ENABLED=false python main.py &
 python test_api.py
 ```
 

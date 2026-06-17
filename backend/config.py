@@ -29,6 +29,45 @@ MAX_INPUT_CHARS = int(os.environ.get("MAX_INPUT_CHARS", "1000000"))
 MAX_OCR_FILE_BYTES = int(os.environ.get("MAX_OCR_FILE_BYTES", str(15 * 1024 * 1024)))
 MAX_COMPARE_QUOTES = int(os.environ.get("MAX_COMPARE_QUOTES", "10"))
 
+# Per-client-IP rate limiting. Size caps above only bound a *single* request;
+# this bounds request *frequency* so a script cannot run up OpenAI spend (or
+# brute-force logins) by firing many normal-sized requests. Two tiers keyed by
+# path: the strict tier covers the LLM-backed (costly) endpoints plus auth
+# (bcrypt is CPU-heavy and a brute-force target); the default tier covers
+# everything else under /api/ (reference lookups, history, waitlist, logout).
+# Limits are per RATE_LIMIT_*_WINDOW seconds and sit well above real human use.
+RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
+RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "120"))
+RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
+RATE_LIMIT_STRICT_REQUESTS = int(os.environ.get("RATE_LIMIT_STRICT_REQUESTS", "20"))
+RATE_LIMIT_STRICT_WINDOW = int(os.environ.get("RATE_LIMIT_STRICT_WINDOW", "60"))
+
+# Endpoints subject to the strict tier (prefix match). Override with a
+# comma-separated list of path prefixes.
+RATE_LIMIT_STRICT_PREFIXES = tuple(
+    prefix.strip()
+    for prefix in os.environ.get(
+        "RATE_LIMIT_STRICT_PREFIXES",
+        "/api/analyze-,/api/check-coi-compliance,/api/ocr,/api/extract,"
+        "/api/compare,/api/classify,/api/generate-proposal,"
+        "/api/auth/login,/api/auth/signup",
+    ).split(",")
+    if prefix.strip()
+)
+
+# Number of trusted reverse proxies in front of the app. The documented
+# deployment is one Caddy hop, which appends the real client IP as the LAST
+# X-Forwarded-For entry, so the true client is the RATE_LIMIT_TRUSTED_PROXIES-th
+# entry from the right. Set to 0 to ignore X-Forwarded-For and use the socket
+# peer directly (correct for local/no-proxy runs); raise it if you add another
+# proxy (e.g. Cloudflare) in front of Caddy.
+RATE_LIMIT_TRUSTED_PROXIES = int(os.environ.get("RATE_LIMIT_TRUSTED_PROXIES", "1"))
+
+# Cap on distinct client IPs tracked at once (LRU eviction beyond this), so the
+# limiter's own bookkeeping can't be turned into a memory-exhaustion vector by
+# rotating source IPs.
+RATE_LIMIT_MAX_TRACKED_IPS = int(os.environ.get("RATE_LIMIT_MAX_TRACKED_IPS", "20000"))
+
 # CORS: production is same-origin (frontend served by this app behind Caddy),
 # so this list only needs the prod domains plus local dev servers.
 CORS_ORIGINS = [

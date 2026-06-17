@@ -31,6 +31,8 @@ backend/
     analysis.py      # shared analyzer flow (hash → mock|LLM → persist → report)
     auth.py          # bcrypt passwords, token sessions, premium unlocks
     db_ops.py        # upload/waitlist persistence
+    limits.py        # request-size guards (413) for public endpoints
+    rate_limit.py    # per-IP sliding-window rate limiter + client-IP resolution
     mock/            # keyword-based fake analyzers for MOCK_MODE
   routers/
     analyzers.py     # 13 document analyzers
@@ -77,11 +79,12 @@ All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis
 - CORS is an explicit origin list (credentials mode), not a wildcard.
 - Session tokens are 32-byte `secrets.token_urlsafe`; passwords bcrypt-hashed.
 - Public endpoints enforce size ceilings (`services/limits.py`): document text > `MAX_INPUT_CHARS` and OCR uploads > `MAX_OCR_FILE_BYTES` are rejected with `413` before they're persisted, held in memory, or decoded; `/compare` caps quote count at `MAX_COMPARE_QUOTES`. The ceilings sit far above `MAX_DOC_CHARS` (the only text the model sees) so real documents are never refused. The analyzer guard lives in the shared `get_doc_context`, so every analyzer (plus the two-step COI/lease flows) inherits it. Malformed OCR base64 is a `400`, not a `500`.
+- Per-IP rate limiting (`services/rate_limit.py`, wired as middleware in `main.py`) bounds request *frequency* — the size caps only bound a single request, leaving frequency abuse (LLM-cost run-up, login brute-force) open. A dependency-free in-process sliding-window limiter applies two tiers keyed by path: a strict tier (default 20/min) for the LLM-backed endpoints plus `auth/login`+`auth/signup`, and a default tier (120/min) for the rest of `/api/`. `/api/health` and the SPA routes are exempt. Over-limit requests get a `429` with a `Retry-After` header and a string `detail` (SPA-readable, and CORS-wrapped so cross-origin reads work). Client IP comes from `X-Forwarded-For` accounting for `RATE_LIMIT_TRUSTED_PROXIES` trusted hops (Caddy appends the real client as the last entry, so spoofed prefixes are ignored). In-process state is the right fit for the single-worker container; the tracked-IP table is LRU-bounded so it can't itself be exhausted. All thresholds are env-overridable; `RATE_LIMIT_ENABLED=false` turns it off (the offline + legacy test suites run with it off).
 
 ## Testing
 
-- `backend/tests/` — offline pytest suite: all endpoints in mock mode, LLM helper units, traversal regression. Run: `cd backend && python -m pytest tests/`.
-- `backend/test_api.py` — 29-test end-to-end script against a running server (mock or real).
+- `backend/tests/` — offline pytest suite: all endpoints in mock mode, LLM helper units, traversal regression, size guards, and rate-limit units + middleware integration. Run: `cd backend && python -m pytest tests/`. (Limiting is disabled here via `conftest.py`; the rate-limit tests enable it explicitly with tiny limits.)
+- `backend/test_api.py` — 29-test end-to-end script against a running server (mock or real). Run the server with `RATE_LIMIT_ENABLED=false` so the suite isn't throttled.
 - `backend/test_expensive.py` — real OpenAI calls for prompt-quality spot checks.
 
 ## Deployment
