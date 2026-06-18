@@ -59,7 +59,11 @@ def test_classify_gym_contract(client):
     })
     assert response.status_code == 200
     body = response.json()
-    assert body["document_type"] == "gym_contract"
+    # Regression: classify must emit the *canonical* short form ("gym"), not the
+    # internal "gym_contract" label. The SPA routes the analyze button by this
+    # value, so returning "gym_contract" made the analyze button a silent no-op
+    # for gym (and four other) document types.
+    assert body["document_type"] == "gym"
     assert body["supported"] is True
 
 
@@ -69,6 +73,45 @@ def test_classify_unknown_document(client):
     body = response.json()
     assert body["document_type"] == "unknown"
     assert body["supported"] is False
+
+
+def test_classify_emits_canonical_doc_types(client):
+    """Every formerly-suffixed contract type must classify to its short, routable
+    identifier. These five are the ones the SPA could not route before the fix."""
+    cases = {
+        "EMPLOYMENT AGREEMENT with non-compete and at-will arbitration clause": "employment",
+        "INDEPENDENT CONTRACTOR freelance agreement, deliverables and SOW": "freelancer",
+        "INFLUENCER sponsorship brand deal with content usage rights": "influencer",
+        "TIMESHARE vacation ownership resort with annual maintenance fee": "timeshare",
+        "GYM fitness membership with monthly dues and cancel policy": "gym",
+    }
+    for text, expected in cases.items():
+        body = client.post("/api/classify", json={"text": text}).json()
+        assert body["document_type"] == expected, f"{text!r} -> {body['document_type']!r}"
+        assert "_contract" not in body["document_type"]
+
+
+def test_every_classifiable_supported_type_has_an_analyzer_route(client):
+    """Contract guard: any supported doc type the classifier can emit must have a
+    real analyzer endpoint the client can POST to. This is exactly the invariant
+    the gym/employment/... routing bug violated — classify returned a value with
+    no matching /api/analyze-* route."""
+    from data.supported_doc_types import SUPPORTED_DOC_TYPES, canonical_doc_type
+    from main import app
+
+    routes = {r.path for r in app.routes}
+    for key, info in SUPPORTED_DOC_TYPES.items():
+        if not info["supported"]:
+            continue
+        canonical = canonical_doc_type(key)
+        # COI uses a bespoke compliance route; everything else is /api/analyze-*
+        # with underscores rendered as hyphens in the path.
+        expected = (
+            "/api/check-coi-compliance"
+            if canonical == "coi"
+            else f"/api/analyze-{canonical.replace('_', '-')}"
+        )
+        assert expected in routes, f"{key!r} -> canonical {canonical!r} has no route {expected!r}"
 
 
 # ---------- auth ----------

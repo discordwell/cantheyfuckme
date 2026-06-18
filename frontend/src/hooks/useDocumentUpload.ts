@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { API_BASE } from '../services/api'
+import { normalizeDocType } from '../constants/doc-types'
 import type { ClassifyResult } from '../types'
 
 interface UseDocumentUploadOptions {
@@ -34,7 +35,13 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
         body: JSON.stringify({ text })
       })
       if (!res.ok) throw new Error('Classification failed')
-      return await res.json()
+      const result = await res.json()
+      // Normalize the doc type to the SPA's routable form before any consumer
+      // (routing, disclaimer gate, affiliate offers) reads it.
+      if (result && typeof result.document_type === 'string') {
+        result.document_type = normalizeDocType(result.document_type)
+      }
+      return result
     } catch (err) {
       console.error(err)
       return null

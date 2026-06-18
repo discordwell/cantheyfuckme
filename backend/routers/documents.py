@@ -8,7 +8,7 @@ from services.llm import get_client, llm_json_call, llm_text_call
 from services.limits import check_text_size, check_ocr_file_size
 from services.mock.extract import mock_extract, mock_compare
 from schemas.common import DocumentInput, ExtractedPolicy, OCRInput, ClassifyInput, ClassifyResult
-from data.supported_doc_types import SUPPORTED_DOC_TYPES
+from data.supported_doc_types import SUPPORTED_DOC_TYPES, canonical_doc_type
 from prompts.extraction import EXTRACTION_PROMPT
 from prompts.classify import CLASSIFY_PROMPT, OCR_PROMPT
 
@@ -297,7 +297,7 @@ async def classify_document(input: ClassifyInput):
 
             doc_info = SUPPORTED_DOC_TYPES[doc_type]
             return ClassifyResult(
-                document_type=doc_type,
+                document_type=canonical_doc_type(doc_type),
                 confidence=0.85,
                 description=doc_info["name"],
                 supported=doc_info["supported"]
@@ -323,7 +323,7 @@ async def classify_document(input: ClassifyInput):
         doc_info = SUPPORTED_DOC_TYPES[doc_type]
 
         return ClassifyResult(
-            document_type=doc_type,
+            document_type=canonical_doc_type(doc_type),
             confidence=result.get("confidence", 0.5),
             description=doc_info["name"],
             supported=doc_info["supported"]

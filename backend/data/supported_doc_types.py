@@ -76,3 +76,28 @@ SUPPORTED_DOC_TYPES = {
         "supported": False
     }
 }
+
+
+# The classifier labels five contract types with a "_contract" suffix, but the
+# rest of the system keys on the short form: the analyzer routes are
+# /api/analyze-{gym,employment,freelancer,influencer,timeshare}, uploads are
+# stored with those same short doc_type values, and the SPA's analyzer routing,
+# disclaimer gate, state-selector gate, and affiliate mapping all switch on them.
+# Canonicalize the classifier's output so a classified document can actually be
+# routed. Without this, /api/classify returns e.g. "gym_contract", which matches
+# no /api/analyze-* route the client knows about, so the analyze button silently
+# does nothing for those five document types.
+DOC_TYPE_ALIASES = {
+    "gym_contract": "gym",
+    "employment_contract": "employment",
+    "freelancer_contract": "freelancer",
+    "influencer_contract": "influencer",
+    "timeshare_contract": "timeshare",
+}
+
+
+def canonical_doc_type(doc_type: str) -> str:
+    """Map a classifier doc-type key to the canonical identifier shared by the
+    analyzer endpoints, upload storage, and the SPA. Unaliased keys (most of
+    them, plus ``contract``/``unknown``) pass through unchanged."""
+    return DOC_TYPE_ALIASES.get(doc_type, doc_type)

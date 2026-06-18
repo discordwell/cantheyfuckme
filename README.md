@@ -118,6 +118,13 @@ python test_api.py
 
 `test_expensive.py` exercises real LLM calls and costs money — run deliberately.
 
+### Frontend
+
+```bash
+cd frontend
+npm test               # Vitest unit suite (doc-type routing, affiliates, report helpers)
+```
+
 ## Deployment
 
 `./deploy.sh` builds the Docker image (frontend build baked in, served by FastAPI), ships it to the VPS, and restarts via `docker-compose.prod.yml`. Caddy terminates TLS for `cantheyfuckme.com` and reverse-proxies to port 8081.

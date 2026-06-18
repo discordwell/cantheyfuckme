@@ -572,11 +572,11 @@ class InsuranceLLMTester:
             self._add_result("Classify Gym", False, data.get("error", "Connection failed"))
             return
 
-        passed = status == 200 and data.get("document_type") == "gym_contract" and data.get("supported") == True
+        passed = status == 200 and data.get("document_type") == "gym" and data.get("supported") == True
         self._add_result(
             "Classify Gym",
             passed,
-            f"Expected gym_contract/supported, got {data.get('document_type')}/{data.get('supported')}" if not passed else "Gym contract classified correctly",
+            f"Expected gym/supported, got {data.get('document_type')}/{data.get('supported')}" if not passed else "Gym contract classified correctly",
             data
         )
 
@@ -588,11 +588,11 @@ class InsuranceLLMTester:
             self._add_result("Classify Employment", False, data.get("error", "Connection failed"))
             return
 
-        passed = status == 200 and data.get("document_type") == "employment_contract" and data.get("supported") == True
+        passed = status == 200 and data.get("document_type") == "employment" and data.get("supported") == True
         self._add_result(
             "Classify Employment",
             passed,
-            f"Expected employment_contract/supported, got {data.get('document_type')}/{data.get('supported')}" if not passed else "Employment contract classified correctly",
+            f"Expected employment/supported, got {data.get('document_type')}/{data.get('supported')}" if not passed else "Employment contract classified correctly",
             data
         )
 
