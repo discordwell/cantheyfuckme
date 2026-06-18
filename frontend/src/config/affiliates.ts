@@ -195,6 +195,107 @@ export const affiliateOffers: Record<string, AffiliateOffer[]> = {
     }
   ],
 
+  // Auto purchase contracts
+  auto: [
+    {
+      id: 'truecar',
+      name: 'TrueCar',
+      tagline: 'Know what you should pay',
+      description: 'See what others paid for the same car and get upfront pricing before you sign.',
+      cta: 'See Pricing',
+      url: 'https://truecar.com/?ref=cantheyfuckme',
+      category: 'auto'
+    },
+    {
+      id: 'thezebra-auto',
+      name: 'The Zebra',
+      tagline: 'Compare car insurance in 5 minutes',
+      description: 'Just bought a car? Compare 100+ insurers before you overpay on coverage.',
+      cta: 'Compare Rates',
+      url: 'https://thezebra.com/?ref=cantheyfuckme',
+      category: 'insurance'
+    }
+  ],
+
+  // Home improvement / contractor contracts
+  home: [
+    {
+      id: 'angi',
+      name: 'Angi',
+      tagline: 'Find pros you can trust',
+      description: 'Compare vetted contractors, read real reviews, and get quotes before you commit.',
+      cta: 'Find a Pro',
+      url: 'https://angi.com/?ref=cantheyfuckme',
+      category: 'home'
+    },
+    {
+      id: 'rocketlawyer-home',
+      name: 'Rocket Lawyer',
+      tagline: 'Protect your project',
+      description: 'Review your contractor agreement and get attorney help with liens and disputes.',
+      cta: 'Get Legal Help',
+      url: 'https://rocketlawyer.com/?ref=cantheyfuckme',
+      category: 'legal'
+    }
+  ],
+
+  // Documents that mostly call for general legal help (e.g. nursing home admission)
+  legal: [
+    {
+      id: 'legalzoom-elder',
+      name: 'LegalZoom',
+      tagline: 'Legal help made simple',
+      description: 'Get affordable attorney advice on admission terms, power of attorney, and your rights.',
+      cta: 'Talk to a Lawyer',
+      url: 'https://legalzoom.com/?ref=cantheyfuckme',
+      category: 'legal'
+    },
+    {
+      id: 'rocketlawyer-legal',
+      name: 'Rocket Lawyer',
+      tagline: 'Legal made simple',
+      description: 'Ask an attorney about clauses you cannot sign away and document what you agreed to.',
+      cta: 'Get Legal Help',
+      url: 'https://rocketlawyer.com/?ref=cantheyfuckme',
+      category: 'legal'
+    }
+  ],
+
+  // Subscription / SaaS agreements
+  subscription: [
+    {
+      id: 'rocketmoney',
+      name: 'Rocket Money',
+      tagline: 'Cancel subscriptions in a tap',
+      description: 'Find and cancel unwanted subscriptions automatically, and negotiate your bills down.',
+      cta: 'Find Subscriptions',
+      url: 'https://rocketmoney.com/?ref=cantheyfuckme',
+      category: 'finance'
+    }
+  ],
+
+  // Debt settlement / collection agreements
+  debt: [
+    {
+      id: 'nationaldebtrelief',
+      name: 'National Debt Relief',
+      tagline: 'Resolve debt for less than you owe',
+      description: 'See if you qualify to reduce what you owe with a free, no-obligation evaluation.',
+      cta: 'Check Eligibility',
+      url: 'https://nationaldebtrelief.com/?ref=cantheyfuckme',
+      category: 'finance'
+    },
+    {
+      id: 'nerdwallet-debt',
+      name: 'NerdWallet',
+      tagline: 'Make smarter money moves',
+      description: 'Compare debt payoff options and credit tools, and get personalized recommendations.',
+      cta: 'Explore Options',
+      url: 'https://nerdwallet.com/?ref=cantheyfuckme',
+      category: 'finance'
+    }
+  ],
+
   // Default/fallback offers
   default: [
     {
@@ -220,7 +321,9 @@ export const affiliateOffers: Record<string, AffiliateOffer[]> = {
 
 // Get offers for a specific document type
 export function getOffersForDocType(docType: string): AffiliateOffer[] {
-  // Map document types to affiliate categories
+  // Map document types to affiliate categories. Every analyzable doc type the
+  // SPA can produce (see constants/doc-types.ts ANALYZABLE_DOC_TYPES) maps to a
+  // contextual category here; only 'contract'/'unknown' fall through to default.
   const typeMapping: Record<string, string> = {
     coi: 'insurance',
     insurance_policy: 'insurance',
@@ -229,7 +332,12 @@ export function getOffersForDocType(docType: string): AffiliateOffer[] {
     employment: 'employment',
     freelancer: 'freelancer',
     influencer: 'influencer',
-    timeshare: 'timeshare'
+    timeshare: 'timeshare',
+    auto_purchase: 'auto',
+    home_improvement: 'home',
+    nursing_home: 'legal',
+    subscription: 'subscription',
+    debt_settlement: 'debt'
   }
 
   const category = typeMapping[docType] || 'default'

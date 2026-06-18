@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import './App.css'
 import { getOffersForDocType } from './config/affiliates'
-import type { AffiliateOffer } from './config/affiliates'
 import { STRIPE_DONATION_LINK } from './config/stripe'
 import { API_BASE } from './services/api'
 import { donationTexts } from './constants/donation'
@@ -58,9 +57,10 @@ function App() {
   // Donation text - randomized on mount
   const [donationText] = useState(() => donationTexts[Math.floor(Math.random() * donationTexts.length)])
 
-  // Affiliate offer state
-  const [currentOffer, setCurrentOffer] = useState<AffiliateOffer | null>(null)
-  const [, setOfferIndex] = useState(0)
+  // Affiliate offer rotation. We track only the rotating index; the offer shown
+  // is derived below from the index and the offers for the current doc type, so
+  // the rotation effect never has to call setState synchronously in its body.
+  const [offerIndex, setOfferIndex] = useState(0)
 
   // Auth hook
   const auth = useAuth()
@@ -208,6 +208,9 @@ function App() {
   const handleAnalyze = async () => {
     if (!upload.docText.trim()) return
 
+    // Start the offer rotation from the first offer for this run.
+    setOfferIndex(0)
+
     // If no classification yet, classify first
     let currentDocType = upload.docType
     if (!currentDocType) {
@@ -260,32 +263,42 @@ function App() {
     upload.setWaitlistEmail('')
     upload.setEmailSubmitted(false)
     resetAllReports()
-    setCurrentOffer(null)
+    setOfferIndex(0)
     disclaimer.setDisclaimerAccepted(false)
     disclaimer.setDisclaimerInput('')
     disclaimer.setPendingAnalysis(null)
   }
 
-  // Rotate affiliate offers during loading
+  // Offers relevant to the classified document. Keyed on the document-type
+  // string the offers actually depend on (not the ClassifyResult identity), so
+  // it recomputes exactly when the type changes. getOffersForDocType returns a
+  // fresh array on every call, so memoizing also keeps the timer effect stable.
+  const docTypeStr = upload.docType?.document_type
+  const activeOffers = useMemo(
+    () => (docTypeStr ? getOffersForDocType(docTypeStr) : []),
+    [docTypeStr]
+  )
+
+  // While an analysis is running, advance the offer index every 5s. The effect
+  // owns only the timer; setState happens inside the interval callback (async),
+  // not synchronously in the effect body, so there are no cascading renders.
   useEffect(() => {
-    if (!anyLoading || !upload.docType) return
-
-    const offers = getOffersForDocType(upload.docType.document_type)
-    if (offers.length === 0) return
-
-    setCurrentOffer(offers[0])
-    setOfferIndex(0)
+    if (!anyLoading || activeOffers.length === 0) return
 
     const interval = setInterval(() => {
-      setOfferIndex(prev => {
-        const next = (prev + 1) % offers.length
-        setCurrentOffer(offers[next])
-        return next
-      })
+      setOfferIndex(prev => (prev + 1) % activeOffers.length)
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [anyLoading, upload.docType])
+  }, [anyLoading, activeOffers])
+
+  // The offer to show is derived, not stored: null unless we're loading and have
+  // offers, otherwise the current index (mod length, so it stays in bounds even
+  // if the offer set shrank since the index last advanced).
+  const currentOffer =
+    anyLoading && activeOffers.length > 0
+      ? activeOffers[offerIndex % activeOffers.length]
+      : null
 
   // Button text helper
   const getAnalyzeButtonText = () => {
