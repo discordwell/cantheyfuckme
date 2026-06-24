@@ -29,6 +29,14 @@ MAX_INPUT_CHARS = int(os.environ.get("MAX_INPUT_CHARS", "1000000"))
 MAX_OCR_FILE_BYTES = int(os.environ.get("MAX_OCR_FILE_BYTES", str(15 * 1024 * 1024)))
 MAX_COMPARE_QUOTES = int(os.environ.get("MAX_COMPARE_QUOTES", "10"))
 
+# Multi-page PDFs are OCR'd one vision call per page, so OpenAI cost and latency
+# scale with page count. Only the first MAX_OCR_PDF_PAGES are processed; the OCR
+# response reports total_pages/pages_processed/truncated so the UI can warn the
+# user that the tail of a long document was NOT analyzed (the clauses that screw
+# you — arbitration, indemnification, auto-renewal — often live in the back).
+# Raise this to cover longer documents at proportionally higher cost per upload.
+MAX_OCR_PDF_PAGES = int(os.environ.get("MAX_OCR_PDF_PAGES", "5"))
+
 # Per-client-IP rate limiting. Size caps above only bound a *single* request;
 # this bounds request *frequency* so a script cannot run up OpenAI spend (or
 # brute-force logins) by firing many normal-sized requests. Two tiers keyed by

@@ -3,7 +3,7 @@ import base64
 import binascii
 
 from fastapi import APIRouter, HTTPException
-from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS, MAX_COMPARE_QUOTES
+from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS, MAX_COMPARE_QUOTES, MAX_OCR_PDF_PAGES
 from services.llm import get_client, llm_json_call, llm_text_call
 from services.limits import check_text_size, check_ocr_file_size
 from services.mock.extract import mock_extract, mock_compare
@@ -173,9 +173,14 @@ async def ocr_document(input: OCRInput):
             # Open PDF from bytes
             pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
 
+            # One vision call per page, so cap the page count (cost/latency).
+            # Report the counts so the caller knows when the tail of a long
+            # document was dropped rather than silently analyzing only the front.
+            total_pages = len(pdf_doc)
+            pages_to_process = min(total_pages, MAX_OCR_PDF_PAGES)
+
             all_text = []
-            # Process each page (limit to first 5 pages for performance)
-            for page_num in range(min(len(pdf_doc), 5)):
+            for page_num in range(pages_to_process):
                 page = pdf_doc[page_num]
                 # Render page to image at 150 DPI for good quality
                 pix = page.get_pixmap(dpi=150)
@@ -209,13 +214,18 @@ async def ocr_document(input: OCRInput):
                 )
 
                 page_text = response.choices[0].message.content or ""
-                if len(pdf_doc) > 1:
+                if total_pages > 1:
                     all_text.append(f"--- Page {page_num + 1} ---\n{page_text}")
                 else:
                     all_text.append(page_text)
 
             pdf_doc.close()
-            return {"text": "\n\n".join(all_text)}
+            return {
+                "text": "\n\n".join(all_text),
+                "total_pages": total_pages,
+                "pages_processed": pages_to_process,
+                "truncated": total_pages > pages_to_process,
+            }
 
         # Handle images directly
         elif input.file_type.startswith('image/'):
@@ -244,7 +254,13 @@ async def ocr_document(input: OCRInput):
                 ]
             )
 
-            return {"text": response.choices[0].message.content or ""}
+            # An image is a single page: report the counts for a uniform shape.
+            return {
+                "text": response.choices[0].message.content or "",
+                "total_pages": 1,
+                "pages_processed": 1,
+                "truncated": False,
+            }
 
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {input.file_type}")

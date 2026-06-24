@@ -259,6 +259,7 @@ function App() {
     upload.setUploadedFileName(null)
     upload.setDocText('')
     upload.setDocType(null)
+    upload.setOcrNotice(null)
     upload.setShowUnsupportedModal(false)
     upload.setWaitlistEmail('')
     upload.setEmailSubmitted(false)
@@ -328,12 +329,14 @@ function App() {
           classifying={upload.classifying}
           loading={anyLoading}
           uploadedFileName={upload.uploadedFileName}
+          ocrNotice={upload.ocrNotice}
           docType={upload.docType}
           docText={upload.docText}
           projectType={upload.projectType}
           selectedState={upload.selectedState}
           setDocText={upload.setDocText}
           setDocType={upload.setDocType}
+          setOcrNotice={upload.setOcrNotice}
           setProjectType={upload.setProjectType}
           setSelectedState={upload.setSelectedState}
           resetAll={resetAll}

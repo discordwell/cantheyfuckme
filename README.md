@@ -77,6 +77,7 @@ npm run dev           # serves http://localhost:5173, talks to :8081
 | `MAX_DOC_CHARS` | `15000` | Document text cap before LLM prompts |
 | `MAX_INPUT_CHARS` | `1000000` | Reject document text longer than this (HTTP 413) before persisting/processing |
 | `MAX_OCR_FILE_BYTES` | `15728640` | Reject OCR uploads larger than this (measured after base64 decode) |
+| `MAX_OCR_PDF_PAGES` | `5` | Max PDF pages OCR'd per upload (one vision call each). Beyond this the response is flagged `truncated` and the SPA warns the user; raise it to analyze longer docs at higher cost |
 | `MAX_COMPARE_QUOTES` | `10` | Max quotes `/compare` will extract in one request |
 | `RATE_LIMIT_ENABLED` | `true` | Per-IP request-frequency limiting (set `false` to disable) |
 | `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW` | `120` / `60` | Default tier: requests per window-seconds for non-LLM `/api/` routes |
@@ -91,7 +92,7 @@ All analyzer endpoints accept JSON and return a typed report with `overall_risk`
 | Endpoint | Description |
 |----------|-------------|
 | `POST /api/classify` | Detect document type |
-| `POST /api/ocr` | PDF/image → text (vision) |
+| `POST /api/ocr` | PDF/image → text (vision); returns `total_pages`/`pages_processed`/`truncated` so callers know if a long PDF was only partly read |
 | `POST /api/analyze-{lease,gym,employment,freelancer,influencer,timeshare,insurance-policy,auto-purchase,home-improvement,nursing-home,subscription,debt-settlement}` | Contract analysis |
 | `POST /api/check-coi-compliance` | COI vs. project requirements |
 | `POST /api/auth/{signup,login,logout}`, `GET /api/auth/me` | Optional accounts |

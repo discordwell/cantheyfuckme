@@ -59,6 +59,8 @@ frontend/
    - Construct the typed Pydantic report and stamp `document_hash`, `is_premium`, `total_issues`.
 3. COI and lease are two-step (extract → analyze) and orchestrate `llm_json_call` directly.
 
+PDF/image uploads first hit `/api/ocr` (vision), which returns the extracted text the SPA then classifies and analyzes. A multi-page PDF is OCR'd one vision call per page, so only the first `MAX_OCR_PDF_PAGES` (default 5) are processed; the response reports `total_pages`/`pages_processed`/`truncated` and the SPA shows a partial-document warning when the back of a long PDF was dropped (`frontend/src/services/ocr.ts:formatOcrTruncationNotice` → the `.ocr-warning` banner in `InputSection`). Without that signal the analyzer would render a confident verdict on a fraction of the document — and the clauses that screw you (arbitration, indemnification, auto-renewal) often live in the back.
+
 State-specific intelligence comes from `data/` (e.g. gym cancellation laws, non-compete enforceability, timeshare rescission windows) injected into prompts.
 
 ### Document-type identifiers (one canonical form)
@@ -75,7 +77,7 @@ The analyzer routes (`/api/analyze-gym`, …), the `doc_type` stored on uploads,
 
 ## Configuration
 
-All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis/OCR), `CLASSIFY_MODEL` (cheap classification). `MAX_DOC_CHARS` caps document text before prompt interpolation (default 15k, enforced on every LLM path including COI/extract). `CORS_ORIGINS` defaults to prod domains + localhost dev ports; production traffic is same-origin so CORS only matters for local dev.
+All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis/OCR), `CLASSIFY_MODEL` (cheap classification). `MAX_DOC_CHARS` caps document text before prompt interpolation (default 15k, enforced on every LLM path including COI/extract). `MAX_OCR_PDF_PAGES` (default 5) caps how many pages of a PDF the vision OCR processes — a cost/coverage knob, not an abuse guard; raise it to analyze longer documents at proportionally higher per-upload cost. `CORS_ORIGINS` defaults to prod domains + localhost dev ports; production traffic is same-origin so CORS only matters for local dev.
 
 ## Security Notes
 
@@ -89,10 +91,10 @@ All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis
 
 ## Testing
 
-- `backend/tests/` — offline pytest suite: all endpoints in mock mode, LLM helper units, traversal regression, size guards, rate-limit units + middleware integration, and password-hashing + login-timing units (`test_auth.py`). Run: `cd backend && python -m pytest tests/`. (Limiting is disabled here via `conftest.py`; the rate-limit tests enable it explicitly with tiny limits.)
+- `backend/tests/` — offline pytest suite: all endpoints in mock mode, LLM helper units, traversal regression, size guards, rate-limit units + middleware integration, password-hashing + login-timing units (`test_auth.py`), and OCR multi-page handling (`test_ocr.py` — builds real PDFs with PyMuPDF, stubs the vision client, asserts the page cap + `truncated` reporting). Run: `cd backend && python -m pytest tests/`. (Limiting is disabled here via `conftest.py`; the rate-limit tests enable it explicitly with tiny limits.)
 - `backend/test_api.py` — 29-test end-to-end script against a running server (mock or real). Run the server with `RATE_LIMIT_ENABLED=false` so the suite isn't throttled.
 - `backend/test_expensive.py` — real OpenAI calls for prompt-quality spot checks.
-- `frontend/` — Vitest unit suite for pure logic (doc-type normalization/routing contract, affiliate selection + an every-analyzable-type-has-contextual-offers coverage contract, report formatting helpers). Run: `cd frontend && npm test`. Node environment, no DOM; `*.test.ts` files are excluded from the production `tsc -b` build.
+- `frontend/` — Vitest unit suite for pure logic (doc-type normalization/routing contract, affiliate selection + an every-analyzable-type-has-contextual-offers coverage contract, report formatting helpers, and the OCR truncation-notice formatter in `services/ocr.ts`). Run: `cd frontend && npm test`. Node environment, no DOM; `*.test.ts` files are excluded from the production `tsc -b` build.
 
 ## Deployment
 

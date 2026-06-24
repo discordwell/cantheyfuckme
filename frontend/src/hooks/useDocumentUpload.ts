@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { API_BASE } from '../services/api'
+import { formatOcrTruncationNotice, type OcrResult } from '../services/ocr'
 import { normalizeDocType } from '../constants/doc-types'
 import type { ClassifyResult } from '../types'
 
@@ -13,6 +14,9 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
   const [ocrLoading, setOcrLoading] = useState(false)
   const [classifying, setClassifying] = useState(false)
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
+  // Warning shown when OCR processed only the first N pages of a longer PDF, so
+  // the user knows the report below is based on a partial document.
+  const [ocrNotice, setOcrNotice] = useState<string | null>(null)
 
   // Document state
   const [docText, setDocText] = useState('')
@@ -86,6 +90,7 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
     setUploadedFileName(file.name)
     onReportsReset()
     setDocType(null)
+    setOcrNotice(null)
 
     let text = ''
 
@@ -118,9 +123,12 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
       })
 
       if (!res.ok) throw new Error('OCR failed')
-      const data = await res.json()
+      const data: OcrResult = await res.json()
       text = data.text
       setDocText(text)
+      // Warn if a long PDF was only partially read (clauses in the dropped
+      // pages won't appear in the analysis).
+      setOcrNotice(formatOcrTruncationNotice(data))
 
       // Classify after OCR
       const classification = await classifyDocument(text)
@@ -160,6 +168,8 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
     // Document state
     uploadedFileName,
     setUploadedFileName,
+    ocrNotice,
+    setOcrNotice,
     docText,
     setDocText,
     docType,

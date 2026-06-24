@@ -79,12 +79,14 @@ interface InputSectionProps {
   classifying: boolean
   loading: boolean
   uploadedFileName: string | null
+  ocrNotice: string | null
   docType: ClassifyResult | null
   docText: string
   projectType: string
   selectedState: string
   setDocText: (text: string) => void
   setDocType: (type: ClassifyResult | null) => void
+  setOcrNotice: (notice: string | null) => void
   setProjectType: (type: string) => void
   setSelectedState: (state: string) => void
   resetAll: () => void
@@ -100,12 +102,14 @@ export default function InputSection({
   classifying,
   loading,
   uploadedFileName,
+  ocrNotice,
   docType,
   docText,
   projectType,
   selectedState,
   setDocText,
   setDocType,
+  setOcrNotice,
   setProjectType,
   setSelectedState,
   resetAll,
@@ -157,10 +161,16 @@ export default function InputSection({
         </div>
       )}
 
+      {ocrNotice && (
+        <div className="ocr-warning" role="alert">
+          !! {ocrNotice}
+        </div>
+      )}
+
       <textarea
         className="doc-input"
         value={docText}
-        onChange={(e) => { setDocText(e.target.value); setDocType(null); }}
+        onChange={(e) => { setDocText(e.target.value); setDocType(null); setOcrNotice(null); }}
         placeholder="...or paste text here"
         rows={8}
       />
