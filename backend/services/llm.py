@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 from openai import OpenAI
 from fastapi import HTTPException
@@ -56,11 +57,78 @@ def llm_text_call(prompt: str, *, model: str = None, max_tokens: int = 4096, sys
     return clean_llm_response(content)
 
 
-def llm_json_call(prompt: str, *, model: str = None, max_tokens: int = 4096, system: str = None) -> dict:
-    """Send a single prompt to the LLM and parse the JSON response."""
-    text = llm_text_call(prompt, model=model, max_tokens=max_tokens, system=system)
+def _extract_json_object(text: str) -> Optional[str]:
+    """Return the first balanced ``{...}`` span in ``text``, or None.
+
+    Recovery path for ``loads_json_lenient``: the prompts tell the model to
+    return only JSON, but it occasionally wraps the object in a sentence of
+    preamble, a trailing sign-off, or a stray markdown fence. We locate the
+    first ``{`` and walk to its matching ``}``, tracking string literals and
+    escapes so braces inside a string value (e.g. a clause quoted in
+    ``clause_text``) don't throw off the depth count. Every analyzer/extraction
+    prompt returns a JSON *object*, so targeting objects is sufficient and can't
+    be fooled by a stray ``[`` in prose. Returns None when there is no ``{`` or
+    the braces never balance (truncated output), so the caller surfaces the
+    original parse error rather than a half-object.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def loads_json_lenient(text: str):
+    """Parse JSON from an LLM response, tolerating prose around the object.
+
+    The happy path is a direct ``json.loads`` (handles plain or already
+    de-fenced JSON, including string values that contain braces). Only when that
+    fails — almost always because the model added a preamble, a trailing remark,
+    or a code fence around an otherwise-valid object — do we fall back to
+    extracting the first balanced ``{...}`` span and parsing that. Raises
+    ``json.JSONDecodeError`` if neither yields valid JSON, so each caller chooses
+    how to surface it: a 500 for the analyzers, a graceful "unknown" for
+    classification.
+    """
     try:
         return json.loads(text)
+    except json.JSONDecodeError:
+        span = _extract_json_object(text)
+        if span is not None and span != text:
+            return json.loads(span)  # propagates JSONDecodeError if still invalid
+        raise
+
+
+def llm_json_call(prompt: str, *, model: str = None, max_tokens: int = 4096, system: str = None) -> dict:
+    """Send a single prompt to the LLM and parse the JSON response.
+
+    Parsing is lenient (see ``loads_json_lenient``): a model that wraps its JSON
+    in a line of prose or a markdown fence still succeeds instead of 500-ing the
+    whole analysis, which is the single path every analyzer depends on.
+    """
+    text = llm_text_call(prompt, model=model, max_tokens=max_tokens, system=system)
+    try:
+        return loads_json_lenient(text)
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse response: {str(e)}")
 

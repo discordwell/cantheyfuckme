@@ -1,10 +1,13 @@
 """Unit tests for the LLM helper layer in services/llm.py."""
+import json
+
 import pytest
 from fastapi import HTTPException
 
 import services.llm as llm
 from services.llm import (
     clean_llm_response,
+    loads_json_lenient,
     llm_json_call,
     llm_text_call,
     parse_limit_to_number,
@@ -24,6 +27,72 @@ def test_clean_strips_json_fence():
 
 def test_clean_strips_bare_fence():
     assert clean_llm_response('```\n{"a": 1}\n```') == '{"a": 1}'
+
+
+# ---------- loads_json_lenient ----------
+# Every analyzer/extraction/classify call parses model output through this, so
+# the prose-tolerance here is what keeps a chatty-but-valid response from 500-ing
+# the whole analysis.
+
+def test_lenient_parses_plain_object():
+    assert loads_json_lenient('{"risk": "high"}') == {"risk": "high"}
+
+
+def test_lenient_parses_array():
+    # A valid top-level array still parses via the direct json.loads path.
+    assert loads_json_lenient('[1, 2, 3]') == [1, 2, 3]
+
+
+def test_lenient_recovers_from_preamble():
+    assert loads_json_lenient('Here is the analysis: {"risk": "high"}') == {"risk": "high"}
+
+
+def test_lenient_recovers_from_trailing_prose():
+    assert loads_json_lenient('{"risk": "high"}\n\nLet me know if you need more.') == {"risk": "high"}
+
+
+def test_lenient_recovers_from_fence_with_surrounding_prose():
+    raw = 'Sure!\n```json\n{"risk": "high"}\n```\nHope that helps.'
+    assert loads_json_lenient(raw) == {"risk": "high"}
+
+
+def test_lenient_ignores_braces_inside_string_values():
+    # A brace inside a string value must not unbalance the span extractor.
+    raw = 'note => {"clause_text": "fee of { everything }", "ok": true}'
+    assert loads_json_lenient(raw) == {"clause_text": "fee of { everything }", "ok": True}
+
+
+def test_lenient_handles_nested_object_and_array():
+    raw = 'result: {"a": [1, 2], "b": {"c": 3}} done'
+    assert loads_json_lenient(raw) == {"a": [1, 2], "b": {"c": 3}}
+
+
+def test_lenient_handles_escaped_quotes_and_braces_in_strings():
+    # The load-bearing escape tracking: a literal '}' sitting inside an
+    # escaped-quote span must not close the object early. Written so this fails
+    # if the scanner stops tracking strings/escapes.
+    raw = 'noise {"a": "he said \\"}\\" ok", "b": 2} trailing'
+    assert loads_json_lenient(raw) == {"a": 'he said "}" ok', "b": 2}
+
+
+def test_lenient_returns_first_object_when_two_present():
+    # Recovery targets the FIRST balanced object; freeze that contract so a
+    # future refactor of the scan can't silently change which object wins.
+    raw = 'first {"a": 1} then {"b": 2}'
+    assert loads_json_lenient(raw) == {"a": 1}
+
+
+def test_lenient_raises_when_no_json_present():
+    # No '{' to recover — must surface the parse error, not invent a result.
+    with pytest.raises(json.JSONDecodeError):
+        loads_json_lenient("there is no json here at all")
+
+
+def test_lenient_raises_on_unbalanced_object():
+    # Truncated output never balances, so recovery returns None and the original
+    # parse error propagates (no half-object handed downstream).
+    with pytest.raises(json.JSONDecodeError):
+        loads_json_lenient('truncated {"a": 1, "b":')
 
 
 # ---------- parse_limit_to_number ----------
@@ -99,6 +168,28 @@ def test_llm_json_call_rejects_invalid_json(fake_llm):
         llm_json_call("prompt")
     assert exc.value.status_code == 500
     assert "Failed to parse" in exc.value.detail
+
+
+def test_llm_json_call_recovers_from_preamble(fake_llm):
+    # A model that prepends a sentence before the JSON object must not 500 the
+    # analysis (every analyzer goes through this path).
+    fake_llm('Here is the JSON you asked for:\n{"risk": "high"}')
+    assert llm_json_call("prompt") == {"risk": "high"}
+
+
+def test_llm_json_call_recovers_from_trailing_prose(fake_llm):
+    fake_llm('{"risk": "high"}\n\nLet me know if you have questions.')
+    assert llm_json_call("prompt") == {"risk": "high"}
+
+
+def test_llm_json_call_recovers_from_fenced_response_with_prose(fake_llm):
+    fake_llm('Sure thing!\n```json\n{"risk": "high"}\n```')
+    assert llm_json_call("prompt") == {"risk": "high"}
+
+
+def test_llm_json_call_handles_braces_in_string_values(fake_llm):
+    fake_llm('Result: {"clause": "late fee of {amount}", "risk": "low"}')
+    assert llm_json_call("prompt") == {"clause": "late fee of {amount}", "risk": "low"}
 
 
 def test_llm_text_call_rejects_empty_content(fake_llm):

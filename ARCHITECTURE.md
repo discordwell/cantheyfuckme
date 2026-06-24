@@ -54,10 +54,12 @@ frontend/
 1. SPA posts document text to `/api/analyze-<type>` (optionally with state/price context).
 2. `services.analysis.run_analysis`:
    - SHA-256 hash of the text; resolve user from Bearer token or cookie.
-   - `MOCK_MODE=true` → keyword-based mock result; otherwise build the per-type prompt (truncated to 15k chars) and call `llm_json_call`, which strips markdown fences and parses JSON.
+   - `MOCK_MODE=true` → keyword-based mock result; otherwise build the per-type prompt (truncated to 15k chars) and call `llm_json_call`, which strips markdown fences and parses JSON leniently.
    - Persist the upload (fire-and-forget; absent DB is fine).
    - Construct the typed Pydantic report and stamp `document_hash`, `is_premium`, `total_issues`.
 3. COI and lease are two-step (extract → analyze) and orchestrate `llm_json_call` directly.
+
+JSON parsing is the single path every analyzer (plus extract/compare/classify) depends on, so it tolerates a model that ignores "Return ONLY valid JSON". `services/llm.py:loads_json_lenient` tries a direct `json.loads` first (the happy path, unchanged for well-formed output), and only on failure falls back to `_extract_json_object` — a balanced-brace scan that recovers the first complete `{...}` object even when the model wrapped it in a sentence of preamble, a trailing sign-off, or a stray code fence. The scan tracks string literals and escapes so a brace inside a quoted clause doesn't unbalance it; truly unparseable output still raises, surfacing as a 500 for analyzers and a graceful `unknown` for classification. Before this, any prose around the JSON 500'd the entire analysis after the user had already paid the latency and the app the OpenAI call.
 
 PDF/image uploads first hit `/api/ocr` (vision), which returns the extracted text the SPA then classifies and analyzes. A multi-page PDF is OCR'd one vision call per page, so only the first `MAX_OCR_PDF_PAGES` (default 5) are processed; the response reports `total_pages`/`pages_processed`/`truncated` and the SPA shows a partial-document warning when the back of a long PDF was dropped (`frontend/src/services/ocr.ts:formatOcrTruncationNotice` → the `.ocr-warning` banner in `InputSection`). Without that signal the analyzer would render a confident verdict on a fraction of the document — and the clauses that screw you (arbitration, indemnification, auto-renewal) often live in the back.
 
@@ -91,7 +93,7 @@ All via env (see README table). Models are overridable: `OPENAI_MODEL` (analysis
 
 ## Testing
 
-- `backend/tests/` — offline pytest suite: all endpoints in mock mode, LLM helper units, traversal regression, size guards, rate-limit units + middleware integration, password-hashing + login-timing units (`test_auth.py`), and OCR multi-page handling (`test_ocr.py` — builds real PDFs with PyMuPDF, stubs the vision client, asserts the page cap + `truncated` reporting). Run: `cd backend && python -m pytest tests/`. (Limiting is disabled here via `conftest.py`; the rate-limit tests enable it explicitly with tiny limits.)
+- `backend/tests/` — offline pytest suite: all endpoints in mock mode, LLM helper units (including `loads_json_lenient` prose/fence recovery + `llm_json_call` integration via a stubbed client, in `test_llm_helpers.py`), traversal regression, size guards, rate-limit units + middleware integration, password-hashing + login-timing units (`test_auth.py`), and OCR multi-page handling (`test_ocr.py` — builds real PDFs with PyMuPDF, stubs the vision client, asserts the page cap + `truncated` reporting). Run: `cd backend && python -m pytest tests/`. (Limiting is disabled here via `conftest.py`; the rate-limit tests enable it explicitly with tiny limits.)
 - `backend/test_api.py` — 29-test end-to-end script against a running server (mock or real). Run the server with `RATE_LIMIT_ENABLED=false` so the suite isn't throttled.
 - `backend/test_expensive.py` — real OpenAI calls for prompt-quality spot checks.
 - `frontend/` — Vitest unit suite for pure logic (doc-type normalization/routing contract, affiliate selection + an every-analyzable-type-has-contextual-offers coverage contract, report formatting helpers, and the OCR truncation-notice formatter in `services/ocr.ts`). Run: `cd frontend && npm test`. Node environment, no DOM; `*.test.ts` files are excluded from the production `tsc -b` build.

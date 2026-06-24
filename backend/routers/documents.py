@@ -4,7 +4,7 @@ import binascii
 
 from fastapi import APIRouter, HTTPException
 from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS, MAX_COMPARE_QUOTES, MAX_OCR_PDF_PAGES
-from services.llm import get_client, llm_json_call, llm_text_call
+from services.llm import get_client, llm_json_call, llm_text_call, loads_json_lenient
 from services.limits import check_text_size, check_ocr_file_size
 from services.mock.extract import mock_extract, mock_compare
 from schemas.common import DocumentInput, ExtractedPolicy, OCRInput, ClassifyInput, ClassifyResult
@@ -329,7 +329,10 @@ async def classify_document(input: ClassifyInput):
             system=CLASSIFY_PROMPT,
         )
 
-        result = json.loads(response_text)
+        # Lenient parse: tolerate a model that wraps the classification JSON in a
+        # line of prose or a fence. A hard JSONDecodeError still degrades to
+        # "unknown" below rather than 500-ing (handled by the except clause).
+        result = loads_json_lenient(response_text)
         doc_type = result.get("type", "unknown")
 
         # Validate doc_type

@@ -75,6 +75,43 @@ def test_classify_unknown_document(client):
     assert body["supported"] is False
 
 
+def test_classify_recovers_from_prose_wrapped_llm_response(client, monkeypatch):
+    """The classify model sometimes prefaces its JSON with a sentence of prose.
+    That used to fail json.loads and fall through to 'unknown' — wrongly telling
+    the user a supported document is unsupported. Lenient parsing recovers the
+    object. Exercises the real (non-mock) branch with a stubbed client.
+    """
+    import routers.documents as documents
+    import services.llm as llm
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            content = (
+                "The document is a gym membership agreement.\n"
+                '```json\n{"type": "gym_contract", "confidence": 0.92}\n```'
+            )
+            message = type("Msg", (), {"content": content})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Resp", (), {"choices": [choice]})()
+
+    fake = type("Client", (), {
+        "chat": type("Chat", (), {"completions": _FakeCompletions()})()
+    })()
+
+    # Take the real LLM branch in classify, and make get_client() return the fake.
+    monkeypatch.setattr(documents, "MOCK_MODE", False)
+    monkeypatch.setattr(llm, "MOCK_MODE", False)
+    monkeypatch.setattr(llm, "_client", fake)
+
+    response = client.post("/api/classify", json={"text": "gym membership agreement"})
+    assert response.status_code == 200
+    body = response.json()
+    # Recovered "gym_contract" from the prose, then canonicalized to the routable
+    # short form the SPA needs.
+    assert body["document_type"] == "gym"
+    assert body["supported"] is True
+
+
 def test_classify_emits_canonical_doc_types(client):
     """Every formerly-suffixed contract type must classify to its short, routable
     identifier. These five are the ones the SPA could not route before the fix."""
