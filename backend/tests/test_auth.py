@@ -1,17 +1,26 @@
-"""Tests for password hashing and the login timing mitigation.
+"""Tests for password hashing, the login timing mitigation, and session-token
+resolution / logout revocation.
 
-These cover two fixes:
+These cover three fixes:
   * bcrypt 5.0 raises ValueError for passwords longer than 72 bytes, which made
     signup (and login with a long password) 500. hash_password/verify_password
     now truncate to bcrypt's 72-byte boundary so long passphrases work.
   * login() must run a bcrypt comparison even for unknown emails so response
     timing can't be used to enumerate which accounts exist.
+  * logout() must revoke the server-side session from whichever credential the
+    client presents. The SPA authenticates with an Authorization: Bearer token
+    (kept in localStorage), but logout used to read only the auth_token cookie,
+    so a Bearer-only client's session survived until its 30-day expiry.
 
 The full signup/login happy path needs a database; here we unit-test the crypto
-helpers directly and exercise the no-DB login branch through the API.
+helpers and token resolution directly and exercise the no-DB login/logout
+branches through the API.
 """
+import types
+
 import routers.auth as auth_router
-from services.auth import hash_password, verify_password, dummy_verify
+from services.auth import (hash_password, verify_password, dummy_verify,
+                           get_session_token)
 
 
 # ---------- hash_password / verify_password ----------
@@ -82,3 +91,70 @@ def test_login_long_password_returns_401_not_500(client):
     # login verification path no longer crashes on >72-byte input.
     resp = client.post("/api/auth/login", json={"email": "ghost@example.com", "password": "a" * 200})
     assert resp.status_code == 401
+
+
+# ---------- get_session_token ----------
+
+def _fake_request(headers=None, cookies=None):
+    """Minimal stand-in for a Request: get_session_token only reads .headers.get
+    and .cookies.get, both of which a plain dict satisfies."""
+    return types.SimpleNamespace(headers=headers or {}, cookies=cookies or {})
+
+
+def test_session_token_prefers_bearer_header():
+    # When both are present the header wins (it is the SPA's source of truth).
+    req = _fake_request(
+        headers={"Authorization": "Bearer header-tok"},
+        cookies={"auth_token": "cookie-tok"},
+    )
+    assert get_session_token(req) == "header-tok"
+
+
+def test_session_token_falls_back_to_cookie():
+    req = _fake_request(cookies={"auth_token": "cookie-tok"})
+    assert get_session_token(req) == "cookie-tok"
+
+
+def test_session_token_none_when_absent():
+    assert get_session_token(_fake_request()) is None
+
+
+def test_session_token_ignores_non_bearer_scheme():
+    # A non-Bearer Authorization header is not a session token; fall back to the
+    # cookie (preserves the prior get_current_user behaviour).
+    req = _fake_request(
+        headers={"Authorization": "Basic Zm9vOmJhcg=="},
+        cookies={"auth_token": "cookie-tok"},
+    )
+    assert get_session_token(req) == "cookie-tok"
+
+
+# ---------- logout revokes the right session (no DB) ----------
+
+def test_logout_revokes_session_from_bearer_token(client, monkeypatch):
+    """The SPA logs out with an Authorization: Bearer header (and, cross-origin,
+    no cookie). Logout must revoke that server-side session, not silently no-op."""
+    deleted = []
+    monkeypatch.setattr(auth_router, "delete_session", lambda tok: deleted.append(tok))
+    resp = client.post("/api/auth/logout", headers={"Authorization": "Bearer sess-bearer"})
+    assert resp.status_code == 200
+    assert deleted == ["sess-bearer"]
+
+
+def test_logout_revokes_session_from_cookie(client, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(auth_router, "delete_session", lambda tok: deleted.append(tok))
+    resp = client.post("/api/auth/logout", headers={"Cookie": "auth_token=sess-cookie"})
+    assert resp.status_code == 200
+    assert deleted == ["sess-cookie"]
+
+
+def test_logout_prefers_bearer_over_cookie(client, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(auth_router, "delete_session", lambda tok: deleted.append(tok))
+    resp = client.post(
+        "/api/auth/logout",
+        headers={"Authorization": "Bearer sess-bearer", "Cookie": "auth_token=sess-cookie"},
+    )
+    assert resp.status_code == 200
+    assert deleted == ["sess-bearer"]

@@ -246,17 +246,23 @@ def check_premium_access(user_id: int, document_hash: str) -> bool:
         db.close()
 
 
-def get_current_user(request: Request) -> Optional[User]:
-    """Extract current user from auth header or cookie"""
-    # Try Authorization header first
+def get_session_token(request: Request) -> Optional[str]:
+    """Resolve the session token a request is carrying.
+
+    The SPA authenticates with an ``Authorization: Bearer`` header (the token is
+    kept in localStorage); login/signup also set the same token as an httponly
+    cookie, which the browser sends automatically on same-origin requests. Prefer
+    the header and fall back to the cookie so every auth-aware endpoint — both
+    ``get_current_user`` (read) and ``logout`` (revoke) — treats the two
+    credentials identically. Returns None when neither is present.
+    """
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        return get_user_from_token(token)
+        return auth_header[7:]
+    return request.cookies.get("auth_token")
 
-    # Try cookie
-    token = request.cookies.get("auth_token")
-    if token:
-        return get_user_from_token(token)
 
-    return None
+def get_current_user(request: Request) -> Optional[User]:
+    """Extract current user from auth header or cookie"""
+    token = get_session_token(request)
+    return get_user_from_token(token) if token else None

@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, Response
 from services.auth import (create_user, get_user_by_email, verify_password,
                            dummy_verify, create_session, delete_session,
-                           get_current_user)
+                           get_current_user, get_session_token)
 from schemas.auth import SignupInput, LoginInput, AuthResponse
 from database import get_db
 from models import Upload
@@ -96,8 +96,14 @@ async def login(input: LoginInput, response: Response):
 
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response):
-    """Log out (delete session)"""
-    token = request.cookies.get("auth_token")
+    """Log out (delete session).
+
+    Resolves the token from the Authorization: Bearer header or the cookie (the
+    SPA authenticates with the Bearer token), so the server-side session is
+    revoked regardless of which credential the client presents. Reading only the
+    cookie left a Bearer-only client's session alive until its 30-day expiry.
+    """
+    token = get_session_token(request)
     if token:
         delete_session(token)
 
