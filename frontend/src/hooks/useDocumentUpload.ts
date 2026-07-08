@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { API_BASE } from '../services/api'
-import { formatOcrTruncationNotice, type OcrResult } from '../services/ocr'
+import { formatOcrError, formatOcrTruncationNotice, type OcrResult } from '../services/ocr'
 import { normalizeDocType } from '../constants/doc-types'
 import type { ClassifyResult } from '../types'
 
@@ -122,7 +122,13 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
         })
       })
 
-      if (!res.ok) throw new Error('OCR failed')
+      if (!res.ok) {
+        // Surface the backend's reason (a corrupt or password-protected PDF, an
+        // unsupported type, a too-large upload, a 429) so the user knows what to
+        // fix, instead of a blanket "is the backend up?" line.
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to process file.')
+      }
       const data: OcrResult = await res.json()
       text = data.text
       setDocText(text)
@@ -135,7 +141,7 @@ export function useDocumentUpload({ onReportsReset }: UseDocumentUploadOptions) 
       handleClassification(classification)
     } catch (err) {
       console.error(err)
-      alert('Failed to process file. Make sure the backend is running!')
+      alert(formatOcrError(err))
     } finally {
       setOcrLoading(false)
     }

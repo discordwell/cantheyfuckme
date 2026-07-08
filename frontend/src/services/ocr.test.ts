@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest'
-import { formatOcrTruncationNotice } from './ocr'
+import { formatOcrError, formatOcrTruncationNotice, OCR_BACKEND_DOWN_MESSAGE } from './ocr'
+
+describe('formatOcrError', () => {
+  it("surfaces the backend's actionable detail for a rejected upload", () => {
+    // The upload hook re-throws a 4xx `detail` as an Error; the user needs to
+    // see it (e.g. remove the PDF password) rather than a generic line.
+    const err = new Error('That PDF is password-protected. Remove the password and upload it again.')
+    expect(formatOcrError(err)).toBe(err.message)
+  })
+
+  it('points at the backend when fetch failed with a TypeError (never reached the server)', () => {
+    // fetch rejects with a TypeError on a network failure; its message
+    // ("Failed to fetch") is not something the user can act on.
+    expect(formatOcrError(new TypeError('Failed to fetch'))).toBe(OCR_BACKEND_DOWN_MESSAGE)
+  })
+
+  it('falls back to the backend message for an Error with no message', () => {
+    expect(formatOcrError(new Error(''))).toBe(OCR_BACKEND_DOWN_MESSAGE)
+  })
+
+  it('falls back to the backend message for a non-Error throw', () => {
+    expect(formatOcrError('boom')).toBe(OCR_BACKEND_DOWN_MESSAGE)
+    expect(formatOcrError(undefined)).toBe(OCR_BACKEND_DOWN_MESSAGE)
+  })
+})
 
 describe('formatOcrTruncationNotice', () => {
   it('returns a notice naming both page counts when a PDF was truncated', () => {
