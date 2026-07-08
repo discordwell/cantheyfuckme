@@ -92,7 +92,7 @@ All analyzer endpoints accept JSON and return a typed report with `overall_risk`
 | Endpoint | Description |
 |----------|-------------|
 | `POST /api/classify` | Detect document type |
-| `POST /api/ocr` | PDF/image → text (vision); returns `total_pages`/`pages_processed`/`truncated` so callers know if a long PDF was only partly read |
+| `POST /api/ocr` | PDF/image → text (vision); pages are OCR'd concurrently; returns `total_pages`/`pages_processed`/`truncated` so callers know if a long PDF was only partly read. Corrupt or password-protected PDFs → `400` |
 | `POST /api/analyze-{lease,gym,employment,freelancer,influencer,timeshare,insurance-policy,auto-purchase,home-improvement,nursing-home,subscription,debt-settlement}` | Contract analysis |
 | `POST /api/check-coi-compliance` | COI vs. project requirements |
 | `POST /api/auth/{signup,login,logout}`, `GET /api/auth/me` | Optional accounts |

@@ -12,6 +12,7 @@ binding off and stubbing get_client with a fake that returns canned page text,
 so no network or API key is needed. PDFs are built in-memory with PyMuPDF.
 """
 import base64
+import threading
 
 import fitz  # PyMuPDF (a production dependency)
 
@@ -30,15 +31,21 @@ def _make_pdf_b64(num_pages: int) -> str:
 
 
 class _CountingClient:
-    """Fake OpenAI client: counts create() calls, returns canned page text."""
+    """Fake OpenAI client: counts create() calls, returns canned page text.
+
+    Counting is locked because the endpoint fans page calls out across
+    threads; the count must stay exact under concurrency.
+    """
 
     def __init__(self):
         self.calls = 0
+        self._lock = threading.Lock()
 
         class _Completions:
             def create(_self, **kwargs):
-                self.calls += 1
-                content = f"OCR TEXT {self.calls}"
+                with self._lock:
+                    self.calls += 1
+                    content = f"OCR TEXT {self.calls}"
                 message = type("Msg", (), {"content": content})()
                 choice = type("Choice", (), {"message": message})()
                 return type("Resp", (), {"choices": [choice]})()
@@ -124,6 +131,47 @@ def test_ocr_single_page_pdf_has_no_page_headers(client, monkeypatch):
     assert data["total_pages"] == 1
     assert data["truncated"] is False
     assert "--- Page" not in data["text"]
+
+
+def test_ocr_corrupt_pdf_is_rejected_as_400_before_any_vision_spend(client, monkeypatch):
+    # Garbage bytes wearing a PDF content-type are the uploader's problem, not
+    # a server fault: 400 (not 500), and no paid vision calls for it.
+    fake = _CountingClient()
+    monkeypatch.setattr(documents, "MOCK_MODE", False)
+    monkeypatch.setattr(documents, "get_client", lambda: fake)
+
+    response = client.post("/api/ocr", json={
+        "file_data": base64.b64encode(b"this is not a pdf at all").decode("ascii"),
+        "file_type": "application/pdf",
+        "file_name": "garbage.pdf",
+    })
+    assert response.status_code == 400
+    assert "pdf" in response.json()["detail"].lower()
+    assert fake.calls == 0
+
+
+def test_ocr_password_protected_pdf_is_rejected_as_400(client, monkeypatch):
+    # An encrypted PDF renders as blank/error pages; tell the user to remove
+    # the password instead of burning vision calls on unreadable pages.
+    fake = _CountingClient()
+    monkeypatch.setattr(documents, "MOCK_MODE", False)
+    monkeypatch.setattr(documents, "get_client", lambda: fake)
+
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "secret contract")
+    pdf_bytes = doc.tobytes(
+        encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="hunter2", owner_pw="hunter2"
+    )
+    doc.close()
+
+    response = client.post("/api/ocr", json={
+        "file_data": base64.b64encode(pdf_bytes).decode("ascii"),
+        "file_type": "application/pdf",
+        "file_name": "locked.pdf",
+    })
+    assert response.status_code == 400
+    assert "password" in response.json()["detail"].lower()
+    assert fake.calls == 0
 
 
 def test_ocr_image_reports_single_page(client, monkeypatch):

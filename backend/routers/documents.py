@@ -1,6 +1,7 @@
 import json
 import base64
 import binascii
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, HTTPException
 from config import MOCK_MODE, OPENAI_MODEL, CLASSIFY_MODEL, MAX_DOC_CHARS, MAX_COMPARE_QUOTES, MAX_OCR_PDF_PAGES
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/api", tags=["documents"])
 
 
 @router.post("/extract", response_model=ExtractedPolicy)
-async def extract_document(doc: DocumentInput):
+def extract_document(doc: DocumentInput):
     """Extract structured data from insurance document text"""
     try:
         check_text_size(doc.text)
@@ -36,7 +37,7 @@ async def extract_document(doc: DocumentInput):
 
 
 @router.post("/compare")
-async def compare_quotes(quotes: list[DocumentInput]):
+def compare_quotes(quotes: list[DocumentInput]):
     """Compare multiple insurance quotes"""
     if len(quotes) < 2:
         raise HTTPException(status_code=400, detail="Need at least 2 quotes to compare")
@@ -49,7 +50,7 @@ async def compare_quotes(quotes: list[DocumentInput]):
     # Extract each quote (extract_document enforces the per-quote size cap)
     extracted_quotes = []
     for quote in quotes:
-        extracted = await extract_document(quote)
+        extracted = extract_document(quote)
         extracted_quotes.append(extracted)
 
     if MOCK_MODE:
@@ -80,7 +81,7 @@ Return ONLY valid JSON."""
 
 
 @router.post("/generate-proposal")
-async def generate_proposal(extracted: ExtractedPolicy):
+def generate_proposal(extracted: ExtractedPolicy):
     """Generate a polished client-ready proposal from extracted data"""
 
     # Mock proposal generation
@@ -142,8 +143,33 @@ Format as markdown with clear sections. Keep it concise but comprehensive."""
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Ceiling on simultaneous per-page vision calls for one OCR request. Pages fan
+# out concurrently (independent, network-bound calls), but raising
+# MAX_OCR_PDF_PAGES should increase coverage, not how many parallel OpenAI
+# requests a single upload can open.
+_OCR_PAGE_WORKERS = 5
+
+
+def _ocr_page(client, image_data_url: str) -> str:
+    """Extract the text of one page image with a single vision call."""
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        max_completion_tokens=4096,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": OCR_PROMPT},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            }
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
 @router.post("/ocr")
-async def ocr_document(input: OCRInput):
+def ocr_document(input: OCRInput):
     """Extract text from PDF or image using OpenAI Vision API"""
     try:
         check_ocr_file_size(input.file_data)
@@ -168,58 +194,58 @@ async def ocr_document(input: OCRInput):
         # Handle PDFs by converting to images first
         if input.file_type == 'application/pdf':
             import fitz  # PyMuPDF
-            import io
 
-            # Open PDF from bytes
-            pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
-
-            # One vision call per page, so cap the page count (cost/latency).
-            # Report the counts so the caller knows when the tail of a long
-            # document was dropped rather than silently analyzing only the front.
-            total_pages = len(pdf_doc)
-            pages_to_process = min(total_pages, MAX_OCR_PDF_PAGES)
-
-            all_text = []
-            for page_num in range(pages_to_process):
-                page = pdf_doc[page_num]
-                # Render page to image at 150 DPI for good quality
-                pix = page.get_pixmap(dpi=150)
-                img_bytes = pix.tobytes("png")
-                img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-
-                # Create data URL for image
-                data_url = f"data:image/png;base64,{img_base64}"
-
-                # Call Vision API for this page
-                response = client.chat.completions.create(
-                    model=OPENAI_MODEL,
-                    max_completion_tokens=4096,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": OCR_PROMPT
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": data_url
-                                    }
-                                }
-                            ]
-                        }
-                    ]
+            # A garbage or truncated upload is the uploader's problem, not a
+            # server fault: reject it as a 400, before any vision spend.
+            try:
+                pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not read that PDF - the file appears to be invalid or corrupted.",
                 )
 
-                page_text = response.choices[0].message.content or ""
-                if total_pages > 1:
-                    all_text.append(f"--- Page {page_num + 1} ---\n{page_text}")
-                else:
-                    all_text.append(page_text)
+            # Render pages to PNGs sequentially (PyMuPDF objects are not
+            # thread-safe) and close the document before the network calls.
+            # One vision call per page, so cap the page count (cost/latency)
+            # and report the counts so the caller knows when the tail of a
+            # long document was dropped rather than silently analyzing only
+            # the front.
+            try:
+                if pdf_doc.needs_pass:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="That PDF is password-protected. Remove the password and upload it again.",
+                    )
 
-            pdf_doc.close()
+                total_pages = len(pdf_doc)
+                pages_to_process = min(total_pages, MAX_OCR_PDF_PAGES)
+
+                page_data_urls = []
+                for page_num in range(pages_to_process):
+                    # Render page to image at 150 DPI for good quality
+                    pix = pdf_doc[page_num].get_pixmap(dpi=150)
+                    img_base64 = base64.b64encode(pix.tobytes("png")).decode('utf-8')
+                    page_data_urls.append(f"data:image/png;base64,{img_base64}")
+            finally:
+                pdf_doc.close()
+
+            # OCR the pages concurrently. Each page is an independent vision
+            # call taking seconds, and this endpoint already runs in a worker
+            # thread, so fanning out turns ~N sequential round-trips into
+            # roughly one. Order is preserved (executor.map), and a failed
+            # page propagates exactly like the old sequential loop.
+            if len(page_data_urls) > 1:
+                with ThreadPoolExecutor(max_workers=min(len(page_data_urls), _OCR_PAGE_WORKERS)) as pool:
+                    page_texts = list(pool.map(lambda url: _ocr_page(client, url), page_data_urls))
+            else:
+                page_texts = [_ocr_page(client, url) for url in page_data_urls]
+
+            if total_pages > 1:
+                all_text = [f"--- Page {i + 1} ---\n{text}" for i, text in enumerate(page_texts)]
+            else:
+                all_text = page_texts
+
             return {
                 "text": "\n\n".join(all_text),
                 "total_pages": total_pages,
@@ -229,34 +255,11 @@ async def ocr_document(input: OCRInput):
 
         # Handle images directly
         elif input.file_type.startswith('image/'):
-            media_type = input.file_type
-            data_url = f"data:{media_type};base64,{file_b64}"
-
-            response = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                max_completion_tokens=4096,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": OCR_PROMPT
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": data_url
-                                }
-                            }
-                        ]
-                    }
-                ]
-            )
+            data_url = f"data:{input.file_type};base64,{file_b64}"
 
             # An image is a single page: report the counts for a uniform shape.
             return {
-                "text": response.choices[0].message.content or "",
+                "text": _ocr_page(client, data_url),
                 "total_pages": 1,
                 "pages_processed": 1,
                 "truncated": False,
@@ -272,7 +275,7 @@ async def ocr_document(input: OCRInput):
 
 
 @router.post("/classify", response_model=ClassifyResult)
-async def classify_document(input: ClassifyInput):
+def classify_document(input: ClassifyInput):
     """Classify document type using cheap/fast model"""
     try:
         check_text_size(input.text)

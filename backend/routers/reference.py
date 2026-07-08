@@ -6,7 +6,7 @@ router = APIRouter(prefix="/api", tags=["reference"])
 
 
 @router.get("/project-types")
-async def get_project_types():
+def get_project_types():
     """Get available preset project types and their requirements"""
     return {
         key: {
@@ -21,7 +21,7 @@ async def get_project_types():
 
 
 @router.get("/states")
-async def get_states():
+def get_states():
     """Get list of all states with summary of their insurance rules"""
     states = []
     for state_code in sorted(STATE_WORKERS_COMP.keys()):
@@ -43,7 +43,7 @@ async def get_states():
 
 
 @router.get("/state/{state_code}")
-async def get_state_details(state_code: str):
+def get_state_details(state_code: str):
     """Get detailed insurance requirements for a specific state"""
     state_upper = state_code.upper()
 
@@ -86,7 +86,7 @@ async def get_state_details(state_code: str):
 
 
 @router.get("/ai-limited-states")
-async def get_ai_limited_states():
+def get_ai_limited_states():
     """Get states with broad anti-indemnity statutes that limit AI coverage"""
     mitigations = {
         "AZ": ["CG 24 26 endorsement (excludes your negligence from AI)", "Higher primary limits on your own CGL"],

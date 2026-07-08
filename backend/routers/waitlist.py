@@ -6,7 +6,7 @@ router = APIRouter(prefix="/api", tags=["waitlist"])
 
 
 @router.post("/waitlist", response_model=WaitlistResponse)
-async def add_to_waitlist(input: WaitlistInput):
+def add_to_waitlist(input: WaitlistInput):
     """Add someone to the waitlist for unsupported document types"""
     # Validate email format (basic)
     if not input.email or '@' not in input.email:

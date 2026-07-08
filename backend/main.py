@@ -94,6 +94,9 @@ app.include_router(reference.router)
 app.include_router(waitlist.router)
 
 
+# Deliberately async (the rest of the API is plain `def` so blocking LLM/DB
+# work runs in the threadpool): liveness runs on the event loop itself, so it
+# answers instantly even when every worker thread is busy with slow analyses.
 @app.get("/api/health")
 async def health():
     return {"message": "cantheyfuckme.com API", "status": "running"}

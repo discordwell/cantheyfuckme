@@ -29,3 +29,9 @@ class CheckoutInput(BaseModel):
     document_hash: str
     success_url: str
     cancel_url: str
+
+
+class UnlockInput(BaseModel):
+    # Optional so a missing hash stays the endpoint's historical 400 rather
+    # than becoming a 422 from validation.
+    document_hash: Optional[str] = None

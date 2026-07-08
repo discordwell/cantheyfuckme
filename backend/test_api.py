@@ -3,12 +3,15 @@ Insurance LLM API Test Suite
 Tests all API endpoints with realistic insurance document samples
 """
 
+import os
 import requests
 import json
 from dataclasses import dataclass
 from typing import Optional
 
-BASE_URL = "http://localhost:8081"
+# Overridable so the suite can target a server on a non-default port (e.g.
+# when a stale dev server is already squatting on 8081).
+BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8081")
 
 # Test Documents
 MESSY_COI_EMAIL = """fwd: insurance stuff

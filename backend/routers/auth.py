@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 
 @router.post("/auth/signup", response_model=AuthResponse)
-async def signup(input: SignupInput, response: Response):
+def signup(input: SignupInput, response: Response):
     """Create a new user account"""
     # Validate email format
     if not input.email or '@' not in input.email:
@@ -57,7 +57,7 @@ async def signup(input: SignupInput, response: Response):
 
 
 @router.post("/auth/login", response_model=AuthResponse)
-async def login(input: LoginInput, response: Response):
+def login(input: LoginInput, response: Response):
     """Log in to existing account"""
     user = get_user_by_email(input.email)
 
@@ -95,7 +95,7 @@ async def login(input: LoginInput, response: Response):
 
 
 @router.post("/auth/logout")
-async def logout(request: Request, response: Response):
+def logout(request: Request, response: Response):
     """Log out (delete session).
 
     Resolves the token from the Authorization: Bearer header or the cookie (the
@@ -112,7 +112,7 @@ async def logout(request: Request, response: Response):
 
 
 @router.get("/auth/me")
-async def get_me(request: Request):
+def get_me(request: Request):
     """Get current user info"""
     user = get_current_user(request)
     if not user:
@@ -129,7 +129,7 @@ async def get_me(request: Request):
 
 
 @router.get("/user/history")
-async def get_user_history(request: Request):
+def get_user_history(request: Request):
     """Get user's document analysis history"""
     user = get_current_user(request)
     if not user:

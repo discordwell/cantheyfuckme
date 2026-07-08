@@ -63,7 +63,7 @@ router = APIRouter(prefix="/api", tags=["analyzers"])
 # ============== COI COMPLIANCE CHECK ==============
 
 @router.post("/check-coi-compliance", response_model=ComplianceReport)
-async def check_coi_compliance(input: COIComplianceInput, request: Request):
+def check_coi_compliance(input: COIComplianceInput, request: Request):
     """Check a Certificate of Insurance against contract requirements"""
     try:
         doc_hash, user, is_premium = get_doc_context(request, input.coi_text)
@@ -114,7 +114,7 @@ async def check_coi_compliance(input: COIComplianceInput, request: Request):
 # ============== LEASE ANALYSIS ==============
 
 @router.post("/analyze-lease", response_model=LeaseAnalysisReport)
-async def analyze_lease(input: LeaseAnalysisInput, request: Request):
+def analyze_lease(input: LeaseAnalysisInput, request: Request):
     """Analyze a lease for insurance-related red flags and risks"""
     try:
         doc_hash, user, is_premium = get_doc_context(request, input.lease_text)
@@ -178,7 +178,7 @@ async def analyze_lease(input: LeaseAnalysisInput, request: Request):
 # ============== GYM CONTRACT ANALYSIS ==============
 
 @router.post("/analyze-gym", response_model=GymContractReport)
-async def analyze_gym_contract(input: GymContractInput, request: Request):
+def analyze_gym_contract(input: GymContractInput, request: Request):
     """Analyze a gym membership contract for red flags"""
     try:
         def build_prompt():
@@ -211,7 +211,7 @@ async def analyze_gym_contract(input: GymContractInput, request: Request):
 # ============== EMPLOYMENT CONTRACT ANALYSIS ==============
 
 @router.post("/analyze-employment", response_model=EmploymentContractReport)
-async def analyze_employment_contract(input: EmploymentContractInput, request: Request):
+def analyze_employment_contract(input: EmploymentContractInput, request: Request):
     """Analyze an employment contract for problematic terms"""
     try:
         def build_prompt():
@@ -245,7 +245,7 @@ async def analyze_employment_contract(input: EmploymentContractInput, request: R
 # ============== FREELANCER CONTRACT ANALYSIS ==============
 
 @router.post("/analyze-freelancer", response_model=FreelancerContractReport)
-async def analyze_freelancer_contract(input: FreelancerContractInput, request: Request):
+def analyze_freelancer_contract(input: FreelancerContractInput, request: Request):
     """Analyze a freelancer/contractor agreement"""
     try:
         return run_analysis(
@@ -270,7 +270,7 @@ async def analyze_freelancer_contract(input: FreelancerContractInput, request: R
 # ============== INFLUENCER CONTRACT ANALYSIS ==============
 
 @router.post("/analyze-influencer", response_model=InfluencerContractReport)
-async def analyze_influencer_contract(input: InfluencerContractInput, request: Request):
+def analyze_influencer_contract(input: InfluencerContractInput, request: Request):
     """Analyze an influencer/sponsorship contract"""
     try:
         return run_analysis(
@@ -295,7 +295,7 @@ async def analyze_influencer_contract(input: InfluencerContractInput, request: R
 # ============== TIMESHARE CONTRACT ANALYSIS ==============
 
 @router.post("/analyze-timeshare", response_model=TimeshareContractReport)
-async def analyze_timeshare_contract(input: TimeshareContractInput, request: Request):
+def analyze_timeshare_contract(input: TimeshareContractInput, request: Request):
     """Analyze a timeshare contract"""
     try:
         def build_prompt():
@@ -330,7 +330,7 @@ async def analyze_timeshare_contract(input: TimeshareContractInput, request: Req
 # ============== INSURANCE POLICY ANALYSIS ==============
 
 @router.post("/analyze-insurance-policy", response_model=InsurancePolicyReport)
-async def analyze_insurance_policy(input: InsurancePolicyInput, request: Request):
+def analyze_insurance_policy(input: InsurancePolicyInput, request: Request):
     """Analyze a consumer insurance policy"""
     try:
         return run_analysis(
@@ -357,7 +357,7 @@ async def analyze_insurance_policy(input: InsurancePolicyInput, request: Request
 # ============== AUTO PURCHASE ANALYSIS ==============
 
 @router.post("/analyze-auto-purchase", response_model=AutoPurchaseReport)
-async def analyze_auto_purchase(input: AutoPurchaseInput, request: Request):
+def analyze_auto_purchase(input: AutoPurchaseInput, request: Request):
     """Analyze a vehicle purchase contract"""
     try:
         return run_analysis(
@@ -387,7 +387,7 @@ async def analyze_auto_purchase(input: AutoPurchaseInput, request: Request):
 # ============== HOME IMPROVEMENT ANALYSIS ==============
 
 @router.post("/analyze-home-improvement", response_model=HomeImprovementReport)
-async def analyze_home_improvement(input: HomeImprovementInput, request: Request):
+def analyze_home_improvement(input: HomeImprovementInput, request: Request):
     """Analyze a home improvement / contractor contract"""
     try:
         return run_analysis(
@@ -414,7 +414,7 @@ async def analyze_home_improvement(input: HomeImprovementInput, request: Request
 # ============== NURSING HOME ANALYSIS ==============
 
 @router.post("/analyze-nursing-home", response_model=NursingHomeReport)
-async def analyze_nursing_home(input: NursingHomeInput, request: Request):
+def analyze_nursing_home(input: NursingHomeInput, request: Request):
     """Analyze a nursing home admission agreement"""
     try:
         return run_analysis(
@@ -440,7 +440,7 @@ async def analyze_nursing_home(input: NursingHomeInput, request: Request):
 # ============== SUBSCRIPTION ANALYSIS ==============
 
 @router.post("/analyze-subscription", response_model=SubscriptionReport)
-async def analyze_subscription(input: SubscriptionInput, request: Request):
+def analyze_subscription(input: SubscriptionInput, request: Request):
     """Analyze a subscription or SaaS agreement"""
     try:
         return run_analysis(
@@ -465,7 +465,7 @@ async def analyze_subscription(input: SubscriptionInput, request: Request):
 # ============== DEBT SETTLEMENT ANALYSIS ==============
 
 @router.post("/analyze-debt-settlement", response_model=DebtSettlementReport)
-async def analyze_debt_settlement(input: DebtSettlementInput, request: Request):
+def analyze_debt_settlement(input: DebtSettlementInput, request: Request):
     """Analyze a debt settlement agreement"""
     try:
         return run_analysis(
