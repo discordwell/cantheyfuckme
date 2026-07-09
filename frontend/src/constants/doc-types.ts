@@ -26,6 +26,20 @@ export const ANALYZABLE_DOC_TYPES = [
 
 export type AnalyzableDocType = (typeof ANALYZABLE_DOC_TYPES)[number]
 
+// O(1) membership lookup so callers can ask "does this type have an analyzer?"
+// without re-listing the identifiers. ANALYZABLE_DOC_TYPES is the single source
+// of truth: adding a type there (plus its runAnalysis case) is all that's needed.
+const ANALYZABLE_DOC_TYPE_SET: ReadonlySet<string> = new Set(ANALYZABLE_DOC_TYPES)
+
+// Type guard for the routable analyzer identifiers. The disclaimer gate in
+// App.tsx uses this to decide whether a classified document has an analyzer to
+// run, so no parallel hand-maintained list can drift out of sync and silently
+// skip the analysis (the failure mode that once hit 5 of 13 analyzers). Narrows
+// a bare string to AnalyzableDocType for the pending-analysis state.
+export function isAnalyzableDocType(docType: string): docType is AnalyzableDocType {
+  return ANALYZABLE_DOC_TYPE_SET.has(docType)
+}
+
 // Defense in depth. The classifier's canonical output is the short form above,
 // but it historically labelled five contract types with a "_contract" suffix
 // the SPA cannot route ("gym_contract" matches no /api/analyze-* route), which

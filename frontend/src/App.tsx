@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import './App.css'
 import { getOffersForDocType } from './config/affiliates'
+import { isAnalyzableDocType } from './constants/doc-types'
 import { STRIPE_DONATION_LINK } from './config/stripe'
 import { API_BASE } from './services/api'
 import { donationTexts } from './constants/donation'
@@ -224,8 +225,11 @@ function App() {
     // If disclaimer not yet accepted, show the modal
     if (!disclaimer.disclaimerAccepted) {
       const docTypeStr = currentDocType?.document_type
-      if (docTypeStr && ['coi', 'lease', 'gym', 'employment', 'freelancer', 'influencer', 'timeshare', 'insurance_policy', 'auto_purchase', 'home_improvement', 'nursing_home', 'subscription', 'debt_settlement'].includes(docTypeStr)) {
-        disclaimer.setPendingAnalysis(docTypeStr as 'coi' | 'lease' | 'gym' | 'employment' | 'freelancer' | 'influencer' | 'timeshare' | 'insurance_policy' | 'auto_purchase' | 'home_improvement' | 'nursing_home' | 'subscription' | 'debt_settlement')
+      // Only queue a pending analysis for a type we can actually route; the guard
+      // derives from ANALYZABLE_DOC_TYPES so this can't drift and silently skip a
+      // newly added analyzer after the user accepts the disclaimer.
+      if (docTypeStr && isAnalyzableDocType(docTypeStr)) {
+        disclaimer.setPendingAnalysis(docTypeStr)
       }
       disclaimer.setShowDisclaimerModal(true)
       disclaimer.setDisclaimerInput('')

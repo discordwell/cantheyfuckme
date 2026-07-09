@@ -1,6 +1,5 @@
 import { useState } from 'react'
-
-type AnalysisType = 'coi' | 'lease' | 'gym' | 'employment' | 'freelancer' | 'influencer' | 'timeshare' | 'insurance_policy' | 'auto_purchase' | 'home_improvement' | 'nursing_home' | 'subscription' | 'debt_settlement'
+import type { AnalyzableDocType } from '../constants/doc-types'
 
 interface UseDisclaimerOptions {
   runAnalysis: (docTypeStr: string | undefined) => Promise<void>
@@ -10,7 +9,7 @@ export function useDisclaimer({ runAnalysis }: UseDisclaimerOptions) {
   const [showDisclaimerModal, setShowDisclaimerModal] = useState(false)
   const [disclaimerInput, setDisclaimerInput] = useState('')
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false)
-  const [pendingAnalysis, setPendingAnalysis] = useState<AnalysisType | null>(null)
+  const [pendingAnalysis, setPendingAnalysis] = useState<AnalyzableDocType | null>(null)
 
   const handleDisclaimerSubmit = async () => {
     if (disclaimerInput.toLowerCase().trim() === 'not legal advice') {
